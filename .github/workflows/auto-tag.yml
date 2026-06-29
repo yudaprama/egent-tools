@@ -1,0 +1,37 @@
+name: Auto Tag
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Increment version
+        id: version
+        run: |
+          TAG="${{ steps.latest.outputs.tag }}"
+          MAJOR=$(echo $TAG | sed 's/v//' | cut -d. -f1)
+          MINOR=$(echo $TAG | sed 's/v//' | cut -d. -f2)
+          PATCH=$(echo $TAG | sed 's/v//' | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          echo "new=v${MAJOR}.${MINOR}.${NEW_PATCH}" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          git tag ${{ steps.version.outputs.new }}
+          git push origin ${{ steps.version.outputs.new }}
