@@ -1,4 +1,4 @@
-name: Auto Tag
+name: CI
 
 on:
   push:
@@ -8,7 +8,20 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+      - run: go mod edit -dropreplace github.com/scrypster/muninndb/sdk/go/muninn
+      - run: go vet ./...
+      - run: go test ./...
+
   tag:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

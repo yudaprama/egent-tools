@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -28,16 +27,6 @@ type Store interface {
 	Search(ctx context.Context, userID, query string, limit int) ([]MemoryEntry, error)
 	// List returns all memory entries for a user.
 	List(ctx context.Context, userID string) ([]MemoryEntry, error)
-}
-
-// NotFoundError is returned when a memory entry is not found.
-type NotFoundError struct {
-	UserID string
-	Key    string
-}
-
-func (e *NotFoundError) Error() string {
-	return fmt.Sprintf("memory entry not found: user=%s key=%s", e.UserID, e.Key)
 }
 
 // NoopStore is a stateless Store that persists nothing and recalls nothing.

@@ -190,6 +190,42 @@ func (t *MemoryListTool) InvokableRun(ctx context.Context, _ string, _ ...tool.O
 	return FormatMemories(entries), nil
 }
 
+// MemoryDeleteTool deletes a specific memory entry by key.
+type MemoryDeleteTool struct {
+	mgr *Manager
+}
+
+func NewMemoryDeleteTool(mgr *Manager) *MemoryDeleteTool {
+	return &MemoryDeleteTool{mgr: mgr}
+}
+
+func (t *MemoryDeleteTool) Info(_ context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{
+		Name: "userMemory_delete",
+		Desc: "Delete a specific memory entry by key. Returns confirmation or an error if not found.",
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"key": {Desc: "Memory key to delete (e.g. 'user.name', 'preferences.dark_mode')", Type: schema.String, Required: true},
+		}),
+	}, nil
+}
+
+func (t *MemoryDeleteTool) InvokableRun(ctx context.Context, argsJSON string, _ ...tool.Option) (string, error) {
+	var args struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	userID := UserIDFromContext(ctx)
+	if userID == "" {
+		return "", fmt.Errorf("no user_id in context")
+	}
+	if err := t.mgr.store.Delete(ctx, userID, args.Key); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Deleted memory: %s", args.Key), nil
+}
+
 // AllTools returns the standard set of memory tools for the agent.
 func (m *Manager) AllTools() []tool.BaseTool {
 	return []tool.BaseTool{
@@ -197,5 +233,6 @@ func (m *Manager) AllTools() []tool.BaseTool {
 		NewMemoryGetTool(m),
 		NewMemorySearchTool(m),
 		NewMemoryListTool(m),
+		NewMemoryDeleteTool(m),
 	}
 }

@@ -25,6 +25,7 @@ type Manager struct {
 	store     Store
 	cognitive CognitiveStore
 	batch     BatchStore
+	extractor Extractor
 	mu        sync.RWMutex
 	// Optional hooks for observability (Phase 4: tracing).
 	OnExtract func(userID string, factCount int)
@@ -38,8 +39,13 @@ type BatchStore interface {
 }
 
 // NewManager creates a memory manager backed by the given store.
+// Extraction defaults to the heuristic extractor — call WithExtractor
+// to inject an LLM-based extractor for richer fact coverage.
 func NewManager(store Store) *Manager {
-	mgr := &Manager{store: store}
+	mgr := &Manager{
+		store:     store,
+		extractor: NewHeuristicExtractor(),
+	}
 	if cognitive, ok := store.(CognitiveStore); ok {
 		mgr.cognitive = cognitive
 	}
@@ -47,6 +53,13 @@ func NewManager(store Store) *Manager {
 		mgr.batch = batch
 	}
 	return mgr
+}
+
+// WithExtractor sets the extractor used by ExtractAndStore.
+// Call before ExtractAndStore (not goroutine-safe after first use).
+func (m *Manager) WithExtractor(e Extractor) *Manager {
+	m.extractor = e
+	return m
 }
 
 // Recall retrieves relevant memories for a query.
@@ -93,14 +106,17 @@ func FormatMemories(entries []MemoryEntry) string {
 	return b.String()
 }
 
-// ExtractAndStore pulls simple facts from a user message and stores them.
-// This is a lightweight heuristic extractor; the full LobeHub version uses
-// an embedding model + LLM extraction. We provide:
-//  1. "My name is X" → user.name = X
-//  2. "I live in X" → user.location = X
-//  3. "I like X" / "I prefer X" → preferences.X = true
+// ExtractAndStore uses the configured extractor to pull facts from a user
+// message and stores them in the backing store. Defaults to heuristic
+// extraction; set WithExtractor to switch to LLM-based extraction.
+//
+// When extraction produces no facts, ExtractAndStore is a no-op (not an error).
 func (m *Manager) ExtractAndStore(ctx context.Context, userID, text string) error {
-	facts := extractHeuristic(text)
+	facts, err := m.extractor.Extract(ctx, text)
+	if err != nil {
+		slog.Warn("memory extraction failed", "error", err)
+		return nil // degraded: don't block the conversation on extraction failure
+	}
 	if len(facts) == 0 {
 		return nil
 	}
