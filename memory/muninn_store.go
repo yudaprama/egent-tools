@@ -30,6 +30,14 @@ import (
 type MuninnStore struct {
 	client *muninn.Client
 
+	// trustHeader, when non-empty, is the trusted identity header (e.g.
+	// "X-User-Id") the MuninnDB server trusts as the vault in edge-auth mode.
+	// Each call attaches it (value = userID/vault) so the trusted egent
+	// backend can reach a per-user vault without a per-user Bearer token —
+	// the direct analog of the Oathkeeper edge injecting X-User-Id for the
+	// web SPA. Leave empty to disable (falls back to Bearer/public auth).
+	trustHeader string
+
 	// idCache stores known engram IDs for direct Read/Forget.
 	// Structure: vault → concept → engramID.
 	mu      sync.RWMutex
@@ -51,6 +59,28 @@ func NewMuninnStore(baseURL, token string) *MuninnStore {
 		client:  muninn.NewClient(baseURL, token),
 		idCache: make(map[string]map[string]string),
 	}
+}
+
+// NewMuninnStoreWithTrustHeader creates a MuninnDB-backed memory store where
+// the trusted-backend identity header (e.g. "X-User-Id") is attached to every
+// request with value = userID/vault. Use this when MuninnDB runs in edge-auth
+// mode (MUNINN_TRUST_EDGE_HEADER) so a trusted backend (the egent) can reach
+// per-user vaults without a per-user Bearer token. trustHeader "" disables it.
+func NewMuninnStoreWithTrustHeader(baseURL, token, trustHeader string) *MuninnStore {
+	return &MuninnStore{
+		client:      muninn.NewClient(baseURL, token),
+		trustHeader: trustHeader,
+		idCache:     make(map[string]map[string]string),
+	}
+}
+
+// ctxWithVault attaches the trusted identity header (value = userID/vault) when
+// the store was configured with one. No-op otherwise.
+func (s *MuninnStore) ctxWithVault(ctx context.Context, userID string) context.Context {
+	if s.trustHeader == "" || userID == "" {
+		return ctx
+	}
+	return muninn.WithTrustedVaultHeader(ctx, s.trustHeader, userID)
 }
 
 // NewMuninnStoreFromClient creates a MuninnStore from an existing client.
@@ -96,7 +126,7 @@ func (s *MuninnStore) deleteIDCache(vault, concept string) {
 func (s *MuninnStore) Set(ctx context.Context, userID, key, value string) error {
 	tags := tagsForKey(key)
 
-	id, err := s.client.Write(ctx, userID, key, value, tags)
+	id, err := s.client.Write(s.ctxWithVault(ctx, userID), userID, key, value, tags)
 	if err != nil {
 		return fmt.Errorf("muninn write: %w", err)
 	}
@@ -126,7 +156,7 @@ func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[s
 
 	for start := 0; start < len(requests); start += 50 {
 		end := min(start+50, len(requests))
-		resp, err := s.client.WriteBatch(ctx, userID, requests[start:end])
+		resp, err := s.client.WriteBatch(s.ctxWithVault(ctx, userID), userID, requests[start:end])
 		if err != nil {
 			return fmt.Errorf("muninn batch write: %w", err)
 		}
@@ -153,7 +183,7 @@ func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[s
 // Store interface contract).
 func (s *MuninnStore) Get(ctx context.Context, userID, key string) (*MemoryEntry, error) {
 	if id := s.lookupIDCache(userID, key); id != "" {
-		engram, err := s.client.Read(ctx, id, userID)
+		engram, err := s.client.Read(s.ctxWithVault(ctx, userID), id, userID)
 		if err != nil {
 			return nil, fmt.Errorf("muninn read: %w", err)
 		}
@@ -161,7 +191,7 @@ func (s *MuninnStore) Get(ctx context.Context, userID, key string) (*MemoryEntry
 	}
 
 	// Fallback: activate and filter for exact concept.
-	resp, err := s.client.Activate(ctx, userID, []string{key}, 20)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{key}, 20)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
@@ -180,7 +210,7 @@ func (s *MuninnStore) Get(ctx context.Context, userID, key string) (*MemoryEntry
 // engram (unlike the old implementation which silently returned nil).
 func (s *MuninnStore) Delete(ctx context.Context, userID, key string) error {
 	if id := s.lookupIDCache(userID, key); id != "" {
-		if err := s.client.Forget(ctx, id, userID); err != nil {
+		if err := s.client.Forget(s.ctxWithVault(ctx, userID), id, userID); err != nil {
 			return fmt.Errorf("muninn forget: %w", err)
 		}
 		s.deleteIDCache(userID, key)
@@ -188,7 +218,7 @@ func (s *MuninnStore) Delete(ctx context.Context, userID, key string) error {
 	}
 
 	// Fallback: activate to discover the engram ID.
-	resp, err := s.client.Activate(ctx, userID, []string{key}, 20)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{key}, 20)
 	if err != nil {
 		return fmt.Errorf("muninn activate for delete: %w", err)
 	}
@@ -214,7 +244,7 @@ func (s *MuninnStore) Search(ctx context.Context, userID, query string, limit in
 		limit = 10
 	}
 
-	resp, err := s.client.Activate(ctx, userID, []string{query}, limit)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{query}, limit)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
@@ -234,7 +264,7 @@ func (s *MuninnStore) List(ctx context.Context, userID string) ([]MemoryEntry, e
 	pageSize := 100
 
 	for {
-		resp, err := s.client.ListEngrams(ctx, userID, pageSize, offset)
+		resp, err := s.client.ListEngrams(s.ctxWithVault(ctx, userID), userID, pageSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("muninn list: %w", err)
 		}
@@ -269,7 +299,7 @@ func (s *MuninnStore) Activate(ctx context.Context, userID string, ctxWords []st
 		limit = 10
 	}
 
-	resp, err := s.client.Activate(ctx, userID, ctxWords, limit)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, ctxWords, limit)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
