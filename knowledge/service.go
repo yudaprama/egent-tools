@@ -100,7 +100,12 @@ func (s *Service) UserFileIDs(ctx context.Context, userID string, projectID stri
 	)
 	if projectID != "" {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id FROM public.files WHERE user_id = $1 AND project_id = $2`, userID, projectID)
+			`SELECT id FROM public.files
+			 WHERE project_id = $1
+			   AND (user_id = $2 OR EXISTS (
+			     SELECT 1 FROM project_members
+			      WHERE project_id = $1 AND user_id = $2
+			   ))`, projectID, userID)
 	} else {
 		rows, err = s.pool.Query(ctx,
 			`SELECT id FROM public.files WHERE user_id = $1`, userID)
