@@ -1,0 +1,32 @@
+go.mod
+  s_334cc53e2232ef::t_9919474189c0ce 14-15,17
+  s_334cc53e2232ef::t_7f1bd0649b7445 16
+memory/muninn_store.go
+  s_334cc53e2232ef::t_436271a98cae9e 194
+  s_334cc53e2232ef::t_f6fb522bfc5e91 129
+  s_334cc53e2232ef::t_082c21a63b4f61 302
+  s_334cc53e2232ef::t_a17d3fc0970323 267
+  s_334cc53e2232ef::t_b59fc0e701cd1b 64-85
+  s_334cc53e2232ef::t_cbaa23980f009c 247
+  s_334cc53e2232ef::t_23871e906df060 33-40
+  s_334cc53e2232ef::t_21131c67fcbf62 213
+  s_334cc53e2232ef::t_879142cd101fa1 221
+  s_334cc53e2232ef::t_b6f827a677321a 159
+  s_334cc53e2232ef::t_8a0716d4db97c4 186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "f31851269ac88bd28bd29d8b119afe6659cacd33",
+  "prompts": {},
+  "sessions": {
+    "s_334cc53e2232ef": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0b5986191ffep0ZoCQHORj76kz",
+        "model": "hy3-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
