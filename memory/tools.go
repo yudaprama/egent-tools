@@ -34,6 +34,23 @@ func UserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// ProjectIDFromContext returns the active project id from context, used to
+// scope knowledge retrieval to a single project's files. Empty when the
+// request has no project association (e.g. an ungrouped session), in which
+// case tools fall back to the full user scope.
+type projectIDKey struct{}
+
+func WithProjectID(ctx context.Context, projectID string) context.Context {
+	return context.WithValue(ctx, projectIDKey{}, projectID)
+}
+
+func ProjectIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(projectIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // MemorySetTool lets the agent store a fact about the user.
 type MemorySetTool struct {
 	mgr *Manager

@@ -82,17 +82,29 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// UserFileIDs returns all file IDs owned by the given user. This is the tenant
-// filter applied before semantic search so users cannot read other users'
-// chunks.
-func (s *Service) UserFileIDs(ctx context.Context, userID string) ([]string, error) {
+// UserFileIDs returns the file IDs eligible for retrieval for the given user.
+// This is the tenant filter applied before semantic search so users cannot
+// read other users' chunks. When projectID is non-empty, the result is further
+// scoped to files linked to that project (public.files.project_id), so a
+// project's knowledge_search only surfaces that project's own attachments.
+func (s *Service) UserFileIDs(ctx context.Context, userID string, projectID string) ([]string, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("knowledge: service not initialized")
 	}
 	if userID == "" {
 		return nil, errors.New("knowledge: userID is required")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id FROM public.files WHERE user_id = $1`, userID)
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if projectID != "" {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM public.files WHERE user_id = $1 AND project_id = $2`, userID, projectID)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM public.files WHERE user_id = $1`, userID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: list user files: %w", err)
 	}

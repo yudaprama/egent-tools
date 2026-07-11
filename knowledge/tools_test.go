@@ -29,14 +29,18 @@ func (f *fakeSearcher) SemanticSearch(_ context.Context, p fp.SearchParamsSearch
 
 // fakeService implements KnowledgeBackend without needing a real pool.
 type fakeService struct {
-	searcher Searcher
-	fileIDs  []string
-	fileErr  error
+	searcher       Searcher
+	fileIDs        []string
+	projectFileIDs map[string][]string
+	fileErr        error
 }
 
-func (f *fakeService) UserFileIDs(_ context.Context, _ string) ([]string, error) {
+func (f *fakeService) UserFileIDs(_ context.Context, _, projectID string) ([]string, error) {
 	if f.fileErr != nil {
 		return nil, f.fileErr
+	}
+	if projectID != "" && f.projectFileIDs != nil {
+		return f.projectFileIDs[projectID], nil
 	}
 	return f.fileIDs, nil
 }
@@ -203,5 +207,35 @@ func TestFormatResults_SourceLabelFallback(t *testing.T) {
 	}, "q")
 	if !strings.Contains(out, "chunk: chunk-x") {
 		t.Errorf("expected fallback source label, got %q", out)
+	}
+}
+
+// TestKnowledgeSearchTool_ProjectScoping verifies that a project id carried in
+// context scopes retrieval to that project's files rather than the whole user.
+func TestKnowledgeSearchTool_ProjectScoping(t *testing.T) {
+	srch := &fakeSearcher{results: []fp.SearchResult{{ID: "c1", Text: "x"}}}
+	svc := &fakeService{
+		searcher: srch,
+		fileIDs:  []string{"user-wide-1"},
+		projectFileIDs: map[string][]string{
+			"prj-a": {"project-a-1", "project-a-2"},
+		},
+	}
+	tl := NewKnowledgeSearchTool(svc)
+
+	ctxNoProject := memory.WithUserID(context.Background(), "u-1")
+	if _, err := tl.InvokableRun(ctxNoProject, `{"query":"x"}`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(srch.lastP.FileIDs) != 1 || srch.lastP.FileIDs[0] != "user-wide-1" {
+		t.Errorf("expected user-wide file scope, got %v", srch.lastP.FileIDs)
+	}
+
+	ctxProject := memory.WithProjectID(ctxNoProject, "prj-a")
+	if _, err := tl.InvokableRun(ctxProject, `{"query":"x"}`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(srch.lastP.FileIDs) != 2 || srch.lastP.FileIDs[0] != "project-a-1" {
+		t.Errorf("expected project-a file scope, got %v", srch.lastP.FileIDs)
 	}
 }
