@@ -1,0 +1,28 @@
+knowledge/tools_test.go
+  s_546033388bac3b::t_abff523ceb373f 32-35
+  s_546033388bac3b::t_87346343a0c0e5 38,42-43
+  s_546033388bac3b::t_e3ea78e0397bb1 44,212-241
+memory/tools.go
+  s_546033388bac3b::t_4beb1fb917ad64 37-53
+knowledge/service.go
+  s_546033388bac3b::t_d4476805b7f475 85-90,97-107
+knowledge/tools.go
+  s_546033388bac3b::t_6dda3411411e25 41
+  s_546033388bac3b::t_a9139e42407589 119-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "f392b3a5f90fe5ad49072293d3bf3e6c7ad8bd63",
+  "prompts": {},
+  "sessions": {
+    "s_546033388bac3b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0b026edcdffehr4r4Ri7gYJOT0",
+        "model": "hy3-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
