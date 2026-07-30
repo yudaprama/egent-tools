@@ -1,0 +1,32 @@
+memory/muninn_store.go
+  s_b854be019ff8f9::t_5cf6e035aa30f0 492-509
+  s_b854be019ff8f9::t_94639da0c72ea1 134-151
+memory/store.go
+  s_b854be019ff8f9::t_31af767896b3ba 27-31
+  s_b854be019ff8f9::t_e2d75087898e26 76-77
+memory/manager.go
+  s_b854be019ff8f9::t_f335b940830527 8
+  s_b854be019ff8f9::t_7bc51e300ad310 93-103
+  s_b854be019ff8f9::t_e3fbee9c9046cb 169-193
+memory/http.go
+  s_b854be019ff8f9::t_e3443bfc580ad4 1-4,6-52,55-59,61-62,64-66
+  s_b854be019ff8f9::t_97560adb9540d2 53-54,60
+  s_b854be019ff8f9::t_f8818d15d73e47 63
+  s_b854be019ff8f9::t_29808dfa19faf3 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "47c7bdeda9c114f30381f0366171a5bf53a74268",
+  "prompts": {},
+  "sessions": {
+    "s_b854be019ff8f9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04dd63357ffeR8rGtN4DqJeaww",
+        "model": "glm-5.2"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
