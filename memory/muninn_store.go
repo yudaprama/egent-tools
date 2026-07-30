@@ -16,30 +16,25 @@ import (
 // that strengthens memories with use (Hebbian learning), fades unused ones,
 // and returns contextually relevant results via semantic activation scoring.
 //
-// Each user gets their own vault (namespace). Memories are stored as engrams
-// with concept (key) + content (value). Search uses Activate() for
-// context-aware retrieval instead of simple substring matching.
+// Each tenant gets their own vault. userID and sessionID are stored as tags
+// (e.g. "user:usr123", "session:sess456") so that Search and List can filter
+// by user/session using MuninnDB's tags_all server-side filter.
 //
-// An in-memory ID cache maps concept→engramID so that Get and Delete can
-// call Read / Forget (exact operations) instead of Activate + filter.
-// The cache is populated on Set and Delete and is safe for concurrent use.
-//
-// When MuninnDB is unavailable (not running, network error), all operations
-// fail with an error — callers should treat these as fatal: the binary panics
-// at startup if MuninnDB is unreachable, and there is no in-memory fallback.
+// An in-memory ID cache maps (tenantID, userID, sessionID, concept) → engramID
+// so that Get and Delete can call Read / Forget (exact operations) instead of
+// Activate + filter. The cache is populated on Set and Delete and is safe for
+// concurrent use.
 type MuninnStore struct {
 	client *muninn.Client
 
 	// trustHeader, when non-empty, is the trusted identity header (e.g.
-	// "X-User-Id") the MuninnDB server trusts as the vault in edge-auth mode.
-	// Each call attaches it (value = userID/vault) so the trusted egent
-	// backend can reach a per-user vault without a per-user Bearer token —
-	// the direct analog of the Oathkeeper edge injecting X-User-Id for the
-	// web SPA. Leave empty to disable (falls back to Bearer/public auth).
+	// "X-Tenant-Id") the MuninnDB server trusts as the vault in edge-auth
+	// mode. Each call attaches it (value = tenantID) so the trusted egent
+	// backend can reach a per-tenant vault without a per-tenant Bearer token.
 	trustHeader string
 
 	// idCache stores known engram IDs for direct Read/Forget.
-	// Structure: vault → concept → engramID.
+	// Structure: tenantID → (userID:sessionID:concept) → engramID.
 	mu      sync.RWMutex
 	idCache map[string]map[string]string
 }
@@ -48,39 +43,28 @@ type MuninnStore struct {
 // satisfy when they support semantic/Hebbian memory activation. The Manager
 // uses it to pick the richer retrieval path when available.
 type CognitiveStore interface {
-	Activate(ctx context.Context, userID string, ctxWords []string, limit int) ([]ActivatedMemory, error)
+	Activate(ctx context.Context, tenantID, userID, sessionID string, ctxWords []string, limit int) ([]ActivatedMemory, error)
 }
 
 // NewMuninnStore creates a MuninnDB-backed memory store.
 // baseURL is the MuninnDB HTTP endpoint (e.g. "http://localhost:8475").
 // token is the API key (empty string for no auth).
 func NewMuninnStore(baseURL, token string) *MuninnStore {
-	return &MuninnStore{
-		client:  muninn.NewClient(baseURL, token),
-		idCache: make(map[string]map[string]string),
-	}
+	return NewMuninnStoreWithTrustHeader(baseURL, token, "X-Tenant-Id")
 }
 
 // NewMuninnStoreWithTrustHeader creates a MuninnDB-backed memory store where
-// the trusted-backend identity header (e.g. "X-User-Id") is attached to every
-// request with value = userID/vault. Use this when MuninnDB runs in edge-auth
-// mode (MUNINN_TRUST_EDGE_HEADER) so a trusted backend (the egent) can reach
-// per-user vaults without a per-user Bearer token. trustHeader "" disables it.
+// the trusted-backend identity header is set to trustHeader, defaulting to
+// "X-Tenant-Id". Use this when MuninnDB runs in edge-auth mode
+// (MUNINN_TRUST_EDGE_HEADER) so a trusted backend (the egent) can reach
+// per-tenant vaults without a per-tenant Bearer token. Set trustHeader to
+// "" to disable.
 func NewMuninnStoreWithTrustHeader(baseURL, token, trustHeader string) *MuninnStore {
 	return &MuninnStore{
 		client:      muninn.NewClient(baseURL, token),
 		trustHeader: trustHeader,
 		idCache:     make(map[string]map[string]string),
 	}
-}
-
-// ctxWithVault attaches the trusted identity header (value = userID/vault) when
-// the store was configured with one. No-op otherwise.
-func (s *MuninnStore) ctxWithVault(ctx context.Context, userID string) context.Context {
-	if s.trustHeader == "" || userID == "" {
-		return ctx
-	}
-	return muninn.WithTrustedVaultHeader(ctx, s.trustHeader, userID)
 }
 
 // NewMuninnStoreFromClient creates a MuninnStore from an existing client.
@@ -91,51 +75,64 @@ func NewMuninnStoreFromClient(client *muninn.Client) *MuninnStore {
 	}
 }
 
-// setIDCache records the engram ID for a concept in a vault.
-func (s *MuninnStore) setIDCache(vault, concept, id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.idCache[vault] == nil {
-		s.idCache[vault] = make(map[string]string)
+// ctxWithVault attaches the trusted identity header (value = tenantID) when
+// the store was configured with one. No-op otherwise.
+func (s *MuninnStore) ctxWithVault(ctx context.Context, tenantID string) context.Context {
+	if s.trustHeader == "" || tenantID == "" {
+		return ctx
 	}
-	s.idCache[vault][concept] = id
+	return muninn.WithTrustedVaultHeader(ctx, s.trustHeader, tenantID)
 }
 
-// lookupIDCache returns the cached engram ID for a concept, or "".
-func (s *MuninnStore) lookupIDCache(vault, concept string) string {
+// cacheKey builds a deterministic key for the ID cache.
+func cacheKey(userID, sessionID, concept string) string {
+	return userID + ":" + sessionID + ":" + concept
+}
+
+// setIDCache records the engram ID for a (tenant, user, session, concept).
+func (s *MuninnStore) setIDCache(tenant, userID, sessionID, concept, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.idCache[tenant] == nil {
+		s.idCache[tenant] = make(map[string]string)
+	}
+	s.idCache[tenant][cacheKey(userID, sessionID, concept)] = id
+}
+
+// lookupIDCache returns the cached engram ID for a (tenant, user, session, concept), or "".
+func (s *MuninnStore) lookupIDCache(tenant, userID, sessionID, concept string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.idCache[vault] == nil {
+	if s.idCache[tenant] == nil {
 		return ""
 	}
-	return s.idCache[vault][concept]
+	return s.idCache[tenant][cacheKey(userID, sessionID, concept)]
 }
 
-// deleteIDCache removes a concept from the ID cache.
-func (s *MuninnStore) deleteIDCache(vault, concept string) {
+// deleteIDCache removes a (tenant, user, session, concept) entry from the cache.
+func (s *MuninnStore) deleteIDCache(tenant, userID, sessionID, concept string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.idCache[vault], concept)
+	delete(s.idCache[tenant], cacheKey(userID, sessionID, concept))
 }
 
-// Set stores a memory as an engram. The userID becomes the vault name.
+// Set stores a memory as an engram. The tenantID becomes the vault name.
 // The key becomes the concept, the value becomes the content.
-// Tags include "memory" and the key prefix (e.g. "user", "preferences")
-// for association building. The engram ID is cached for subsequent
-// direct Read / Forget operations.
-func (s *MuninnStore) Set(ctx context.Context, userID, key, value string) error {
-	tags := tagsForKey(key)
+// Tags include "memory", "user:<userID>", "session:<sessionID>", and the
+// key prefix (e.g. "user", "preferences").
+func (s *MuninnStore) Set(ctx context.Context, tenantID, userID, sessionID, key, value string) error {
+	tags := tagsForKey(key, userID, sessionID)
 
-	id, err := s.client.Write(s.ctxWithVault(ctx, userID), userID, key, value, tags)
+	id, err := s.client.Write(s.ctxWithVault(ctx, tenantID), tenantID, key, value, tags)
 	if err != nil {
 		return fmt.Errorf("muninn write: %w", err)
 	}
-	s.setIDCache(userID, key, id)
+	s.setIDCache(tenantID, userID, sessionID, key, id)
 	return nil
 }
 
 // SetBatch stores multiple memories in a single MuninnDB batch call.
-func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[string]string) error {
+func (s *MuninnStore) SetBatch(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -144,10 +141,10 @@ func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[s
 	keys := make([]string, 0, len(entries))
 	for key, value := range entries {
 		requests = append(requests, muninn.WriteRequest{
-			Vault:      userID,
+			Vault:      tenantID,
 			Concept:    key,
 			Content:    value,
-			Tags:       tagsForKey(key),
+			Tags:       tagsForKey(key, userID, sessionID),
 			Confidence: 0.9,
 			Stability:  0.5,
 		})
@@ -156,7 +153,7 @@ func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[s
 
 	for start := 0; start < len(requests); start += 50 {
 		end := min(start+50, len(requests))
-		resp, err := s.client.WriteBatch(s.ctxWithVault(ctx, userID), userID, requests[start:end])
+		resp, err := s.client.WriteBatch(s.ctxWithVault(ctx, tenantID), tenantID, requests[start:end])
 		if err != nil {
 			return fmt.Errorf("muninn batch write: %w", err)
 		}
@@ -167,37 +164,36 @@ func (s *MuninnStore) SetBatch(ctx context.Context, userID string, entries map[s
 			if result.ID == "" {
 				continue
 			}
-			s.setIDCache(userID, keys[start+result.Index], result.ID)
+			s.setIDCache(tenantID, userID, sessionID, keys[start+result.Index], result.ID)
 		}
 	}
 	return nil
 }
 
 // Get retrieves a specific memory by concept (key). It first tries the
-// local ID cache for an exact engram Read, avoiding the cost and
-// semantic uncertainty of an activation sweep. If the ID is not cached
-// (e.g. after a server restart), it falls back to Activate and filters
-// for an exact concept match.
+// local ID cache for an exact engram Read. If the ID is not cached
+// (e.g. after a server restart), it falls back to Activate with a
+// tags_all filter and filters for an exact concept match.
 //
-// Returns (nil, nil) when no entry is found (consistent with the
-// Store interface contract).
-func (s *MuninnStore) Get(ctx context.Context, userID, key string) (*MemoryEntry, error) {
-	if id := s.lookupIDCache(userID, key); id != "" {
-		engram, err := s.client.Read(s.ctxWithVault(ctx, userID), id, userID)
+// Returns (nil, nil) when no entry is found.
+func (s *MuninnStore) Get(ctx context.Context, tenantID, userID, sessionID, key string) (*MemoryEntry, error) {
+	if id := s.lookupIDCache(tenantID, userID, sessionID, key); id != "" {
+		engram, err := s.client.Read(s.ctxWithVault(ctx, tenantID), id, tenantID)
 		if err != nil {
 			return nil, fmt.Errorf("muninn read: %w", err)
 		}
 		return engramToEntryFromEngram(engram), nil
 	}
 
-	// Fallback: activate and filter for exact concept.
-	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{key}, 20)
+	// Fallback: activate with tag filter + exact concept match.
+	filters := tagsAllFilter(userID, sessionID)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, tenantID), tenantID, []string{key}, 20, filters...)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
 	for _, item := range resp.Activations {
 		if item.Concept == key {
-			s.setIDCache(userID, key, item.ID)
+			s.setIDCache(tenantID, userID, sessionID, key, item.ID)
 			return engramToEntryFromActivation(item), nil
 		}
 	}
@@ -206,74 +202,102 @@ func (s *MuninnStore) Get(ctx context.Context, userID, key string) (*MemoryEntry
 
 // Delete forgets an engram by concept (key). It first tries the ID
 // cache for a direct Forget, falling back to Activate when the ID is
-// unknown. Returns ErrMemoryNotFound when neither path locates the
-// engram (unlike the old implementation which silently returned nil).
-func (s *MuninnStore) Delete(ctx context.Context, userID, key string) error {
-	if id := s.lookupIDCache(userID, key); id != "" {
-		if err := s.client.Forget(s.ctxWithVault(ctx, userID), id, userID); err != nil {
+// unknown. Returns ErrMemoryNotFound when neither path locates the engram.
+func (s *MuninnStore) Delete(ctx context.Context, tenantID, userID, sessionID, key string) error {
+	if id := s.lookupIDCache(tenantID, userID, sessionID, key); id != "" {
+		if err := s.client.Forget(s.ctxWithVault(ctx, tenantID), id, tenantID); err != nil {
 			return fmt.Errorf("muninn forget: %w", err)
 		}
-		s.deleteIDCache(userID, key)
+		s.deleteIDCache(tenantID, userID, sessionID, key)
 		return nil
 	}
 
-	// Fallback: activate to discover the engram ID.
-	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{key}, 20)
+	filters := tagsAllFilter(userID, sessionID)
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, tenantID), tenantID, []string{key}, 20, filters...)
 	if err != nil {
 		return fmt.Errorf("muninn activate for delete: %w", err)
 	}
 	for _, item := range resp.Activations {
 		if item.Concept == key {
-			if err := s.client.Forget(ctx, item.ID, userID); err != nil {
+			if err := s.client.Forget(ctx, item.ID, tenantID); err != nil {
 				return fmt.Errorf("muninn forget: %w", err)
 			}
-			s.deleteIDCache(userID, key)
+			s.deleteIDCache(tenantID, userID, sessionID, key)
 			return nil
 		}
 	}
 	return ErrMemoryNotFound
 }
 
-// Search uses MuninnDB's Activate for context-aware retrieval. Unlike
-// semantic ranking. Unlike a naive substring store, this returns memories
-// ranked by MuninnDB's activation score (ACT-R base level + Hebbian boost).
-// by relevance score — combining recency, frequency, and semantic
-// similarity (Hebbian-weighted).
-func (s *MuninnStore) Search(ctx context.Context, userID, query string, limit int) ([]MemoryEntry, error) {
+// Search uses MuninnDB's Activate for context-aware retrieval. When
+// ByUserID or BySessionID options are provided, they are converted
+// into a tags_all server-side filter so the engine only considers engrams
+// matching those tags.
+func (s *MuninnStore) Search(ctx context.Context, tenantID, query string, limit int, opts ...SearchOption) ([]MemoryEntry, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, []string{query}, limit)
+	var filter SearchFilter
+	for _, o := range opts {
+		o(&filter)
+	}
+
+	filters := tagsAllFilter(filter.UserID, filter.SessionID)
+	effectiveLimit := limit
+	if len(filters) > 0 {
+		effectiveLimit = limit * 3
+	}
+
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, tenantID), tenantID, []string{query}, effectiveLimit, filters...)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
 
 	entries := make([]MemoryEntry, 0, len(resp.Activations))
 	for _, item := range resp.Activations {
-		s.setIDCache(userID, item.Concept, item.ID)
-		entries = append(entries, *engramToEntryFromActivation(item))
+		uid, sid := extractUserSessionFromTags(item.Tags)
+		s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
+		entries = append(entries, MemoryEntry{
+			Key:       item.Concept,
+			Value:     item.Content,
+			UserID:    uid,
+			SessionID: sid,
+		})
 	}
 	return entries, nil
 }
 
-// List returns all memories for a user via paginated ListEngrams.
-func (s *MuninnStore) List(ctx context.Context, userID string) ([]MemoryEntry, error) {
+// List returns all memories for a tenant via paginated ListEngrams.
+// When ByUserID or BySessionID options are provided, results are
+// filtered client-side (MuninnDB ListEngrams does not support tag filters).
+func (s *MuninnStore) List(ctx context.Context, tenantID string, opts ...SearchOption) ([]MemoryEntry, error) {
+	var filter SearchFilter
+	for _, o := range opts {
+		o(&filter)
+	}
+
 	var all []MemoryEntry
 	offset := 0
 	pageSize := 100
 
 	for {
-		resp, err := s.client.ListEngrams(s.ctxWithVault(ctx, userID), userID, pageSize, offset)
+		resp, err := s.client.ListEngrams(s.ctxWithVault(ctx, tenantID), tenantID, pageSize, offset)
 		if err != nil {
 			return nil, fmt.Errorf("muninn list: %w", err)
 		}
 
 		for _, item := range resp.Engrams {
-			s.setIDCache(userID, item.Concept, item.ID)
+			uid, sid := extractUserSessionFromTags(item.Tags)
+			if !passesUserSessionFilter(uid, sid, filter) {
+				continue
+			}
+			s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
 			all = append(all, MemoryEntry{
 				Key:       item.Concept,
 				Value:     item.Content,
+				UserID:    uid,
+				SessionID: sid,
 				CreatedAt: unixToTime(item.CreatedAt),
 				UpdatedAt: unixToTime(item.CreatedAt),
 			})
@@ -291,22 +315,22 @@ func (s *MuninnStore) List(ctx context.Context, userID string) ([]MemoryEntry, e
 // This is the enhanced version of Search that exposes MuninnDB's
 // activation scores and "why" explanations. Used by the Manager
 // for injecting relevant memories into the system prompt.
-//
-// ctxWords replaces the former "context" parameter name to avoid
-// shadowing Go's context.Context package.
-func (s *MuninnStore) Activate(ctx context.Context, userID string, ctxWords []string, limit int) ([]ActivatedMemory, error) {
+func (s *MuninnStore) Activate(ctx context.Context, tenantID, userID, sessionID string, ctxWords []string, limit int) ([]ActivatedMemory, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	resp, err := s.client.Activate(s.ctxWithVault(ctx, userID), userID, ctxWords, limit)
+	filters := tagsAllFilter(userID, sessionID)
+
+	resp, err := s.client.Activate(s.ctxWithVault(ctx, tenantID), tenantID, ctxWords, limit, filters...)
 	if err != nil {
 		return nil, fmt.Errorf("muninn activate: %w", err)
 	}
 
 	results := make([]ActivatedMemory, 0, len(resp.Activations))
 	for _, item := range resp.Activations {
-		s.setIDCache(userID, item.Concept, item.ID)
+		uid, sid := extractUserSessionFromTags(item.Tags)
+		s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
 		why := ""
 		if item.Why != nil {
 			why = *item.Why
@@ -361,34 +385,82 @@ var _ CognitiveStore = (*MuninnStore)(nil)
 
 // --- helpers ---
 
+// tagsAllFilter builds tags_all filters when userID or sessionID is set.
+func tagsAllFilter(userID, sessionID string) []muninn.Filter {
+	var tagsAll []string
+	if userID != "" {
+		tagsAll = append(tagsAll, "user:"+userID)
+	}
+	if sessionID != "" {
+		tagsAll = append(tagsAll, "session:"+sessionID)
+	}
+	if len(tagsAll) == 0 {
+		return nil
+	}
+	return []muninn.Filter{{Field: "tags_all", Op: "all", Value: tagsAll}}
+}
+
+// tagsForKey builds the tag list for an engram write.
+func tagsForKey(key, userID, sessionID string) []string {
+	tags := []string{"memory"}
+	if userID != "" {
+		tags = append(tags, "user:"+userID)
+	}
+	if sessionID != "" {
+		tags = append(tags, "session:"+sessionID)
+	}
+	if idx := strings.IndexByte(key, '.'); idx > 0 {
+		tags = append(tags, key[:idx])
+	}
+	return tags
+}
+
+// extractUserSessionFromTags parses user: and session: tags from a tag slice.
+func extractUserSessionFromTags(tags []string) (userID, sessionID string) {
+	for _, t := range tags {
+		if strings.HasPrefix(t, "user:") {
+			userID = t[5:]
+		} else if strings.HasPrefix(t, "session:") {
+			sessionID = t[8:]
+		}
+	}
+	return
+}
+
+// passesUserSessionFilter checks whether the entry's tags match the filter.
+func passesUserSessionFilter(tagUserID, tagSessionID string, filter SearchFilter) bool {
+	if filter.UserID != "" && tagUserID != filter.UserID {
+		return false
+	}
+	if filter.SessionID != "" && tagSessionID != filter.SessionID {
+		return false
+	}
+	return true
+}
+
 // engramToEntryFromActivation converts an ActivationItem to a MemoryEntry.
-// ActivationItem does not carry CreatedAt/UpdatedAt, so timestamps are
-// zero-valued. This is intentional — callers that need timestamps should
-// use List or Read directly.
 func engramToEntryFromActivation(item muninn.ActivationItem) *MemoryEntry {
+	uid, sid := extractUserSessionFromTags(item.Tags)
 	return &MemoryEntry{
-		Key:   item.Concept,
-		Value: item.Content,
+		Key:       item.Concept,
+		Value:     item.Content,
+		UserID:    uid,
+		SessionID: sid,
 	}
 }
 
 // engramToEntryFromEngram converts a full Engram (from Read) to a
 // MemoryEntry, preserving real server-side timestamps.
 func engramToEntryFromEngram(engram *muninn.Engram) *MemoryEntry {
+	uid, sid := extractUserSessionFromTags(engram.Tags)
 	return &MemoryEntry{
 		Key:       engram.Concept,
 		Value:     engram.Content,
+		UserID:    uid,
+		SessionID: sid,
 		CreatedAt: unixToTime(engram.CreatedAt),
 		UpdatedAt: unixToTime(engram.UpdatedAt),
 	}
-}
-
-func tagsForKey(key string) []string {
-	tags := []string{"memory"}
-	if idx := strings.IndexByte(key, '.'); idx > 0 {
-		tags = append(tags, key[:idx])
-	}
-	return tags
 }
 
 // unixToTime converts a Unix timestamp (seconds) to time.Time.

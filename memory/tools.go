@@ -10,18 +10,30 @@ import (
 )
 
 // ManagerStore is the minimal interface tools need from the manager.
-// Allows the tools to work with any Manager, not a specific type.
 type ManagerStore interface {
-	Store(ctx context.Context, userID, key, value string) error
-	Get(ctx context.Context, userID, key string) (*MemoryEntry, error)
-	Delete(ctx context.Context, userID, key string) error
-	Search(ctx context.Context, userID, query string, limit int) ([]MemoryEntry, error)
-	List(ctx context.Context, userID string) ([]MemoryEntry, error)
+	Store(ctx context.Context, tenantID, userID, sessionID, key, value string) error
+	Get(ctx context.Context, tenantID, userID, sessionID, key string) (*MemoryEntry, error)
+	Delete(ctx context.Context, tenantID, userID, sessionID, key string) error
+	Search(ctx context.Context, tenantID, query string, limit int, opts ...SearchOption) ([]MemoryEntry, error)
+	List(ctx context.Context, tenantID string, opts ...SearchOption) ([]MemoryEntry, error)
 }
 
-// CurrentUserID returns the active userID from context.
-// Set by the agent runtime per-request so the tools can scope automatically.
+// context key types
+type tenantIDKey struct{}
 type userIDKey struct{}
+type sessionIDKey struct{}
+type projectIDKey struct{}
+
+func WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, tenantIDKey{}, tenantID)
+}
+
+func TenantIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(tenantIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 func WithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, userIDKey{}, userID)
@@ -34,11 +46,16 @@ func UserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// ProjectIDFromContext returns the active project id from context, used to
-// scope knowledge retrieval to a single project's files. Empty when the
-// request has no project association (e.g. an ungrouped session), in which
-// case tools fall back to the full user scope.
-type projectIDKey struct{}
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey{}, sessionID)
+}
+
+func SessionIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(sessionIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 func WithProjectID(ctx context.Context, projectID string) context.Context {
 	return context.WithValue(ctx, projectIDKey{}, projectID)
@@ -79,11 +96,16 @@ func (t *MemorySetTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
+	tenantID := TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", fmt.Errorf("no tenant_id in context")
+	}
 	userID := UserIDFromContext(ctx)
 	if userID == "" {
 		return "", fmt.Errorf("no user_id in context")
 	}
-	if err := t.mgr.store.Set(ctx, userID, args.Key, args.Value); err != nil {
+	sessionID := SessionIDFromContext(ctx)
+	if err := t.mgr.store.Set(ctx, tenantID, userID, sessionID, args.Key, args.Value); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Stored memory: %s = %s", args.Key, args.Value), nil
@@ -115,11 +137,16 @@ func (t *MemoryGetTool) InvokableRun(ctx context.Context, argsJSON string, _ ...
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
+	tenantID := TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", fmt.Errorf("no tenant_id in context")
+	}
 	userID := UserIDFromContext(ctx)
 	if userID == "" {
 		return "", fmt.Errorf("no user_id in context")
 	}
-	entry, err := t.mgr.store.Get(ctx, userID, args.Key)
+	sessionID := SessionIDFromContext(ctx)
+	entry, err := t.mgr.store.Get(ctx, tenantID, userID, sessionID, args.Key)
 	if err != nil {
 		return "", err
 	}
@@ -141,7 +168,7 @@ func NewMemorySearchTool(mgr *Manager) *MemorySearchTool {
 func (t *MemorySearchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "userMemory_search",
-		Desc: "Search the user's stored memories. Use this at the start of a conversation to recall user preferences, name, location, and history.",
+		Desc: "Search the user's stored memories. Use at the start of a conversation to recall user preferences, name, location, and history.",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {Desc: "Search terms (e.g. 'name', 'location', 'preferences')", Type: schema.String, Required: true},
 			"limit": {Desc: "Max results to return (default 10)", Type: schema.Integer, Required: false},
@@ -157,25 +184,24 @@ func (t *MemorySearchTool) InvokableRun(ctx context.Context, argsJSON string, _ 
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
-	userID := UserIDFromContext(ctx)
-	if userID == "" {
-		return "", fmt.Errorf("no user_id in context")
+	tenantID := TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", fmt.Errorf("no tenant_id in context")
 	}
 	if args.Limit == 0 {
 		args.Limit = 10
 	}
-	entries, err := t.mgr.store.Search(ctx, userID, args.Query, args.Limit)
+	entries, err := t.mgr.store.Search(ctx, tenantID, args.Query, args.Limit, ByUserID(UserIDFromContext(ctx)), BySessionID(SessionIDFromContext(ctx)))
 	if err != nil {
 		return "", err
 	}
 	if len(entries) == 0 {
 		return fmt.Sprintf("No memories found matching: %s", args.Query), nil
 	}
-	formatted := FormatMemories(entries)
-	return formatted, nil
+	return FormatMemories(entries), nil
 }
 
-// MemoryListTool lists all stored memories.
+// MemoryListTool lists all stored memories for the current user and session.
 type MemoryListTool struct {
 	mgr *Manager
 }
@@ -187,17 +213,17 @@ func NewMemoryListTool(mgr *Manager) *MemoryListTool {
 func (t *MemoryListTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name:        "userMemory_list",
-		Desc:        "List all stored memories for the current user.",
+		Desc:        "List all stored memories for the current user and session.",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
 
 func (t *MemoryListTool) InvokableRun(ctx context.Context, _ string, _ ...tool.Option) (string, error) {
-	userID := UserIDFromContext(ctx)
-	if userID == "" {
-		return "", fmt.Errorf("no user_id in context")
+	tenantID := TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", fmt.Errorf("no tenant_id in context")
 	}
-	entries, err := t.mgr.store.List(ctx, userID)
+	entries, err := t.mgr.store.List(ctx, tenantID, ByUserID(UserIDFromContext(ctx)), BySessionID(SessionIDFromContext(ctx)))
 	if err != nil {
 		return "", err
 	}
@@ -233,11 +259,16 @@ func (t *MemoryDeleteTool) InvokableRun(ctx context.Context, argsJSON string, _ 
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
+	tenantID := TenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", fmt.Errorf("no tenant_id in context")
+	}
 	userID := UserIDFromContext(ctx)
 	if userID == "" {
 		return "", fmt.Errorf("no user_id in context")
 	}
-	if err := t.mgr.store.Delete(ctx, userID, args.Key); err != nil {
+	sessionID := SessionIDFromContext(ctx)
+	if err := t.mgr.store.Delete(ctx, tenantID, userID, sessionID, args.Key); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Deleted memory: %s", args.Key), nil

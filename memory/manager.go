@@ -18,8 +18,8 @@ import (
 //
 //	mgr := NewManager(store)
 //	// During conversation:
-//	mgr.ExtractAndStore(ctx, userID, conversationText)
-//	memories := mgr.Recall(ctx, userID, userQuery)
+//	mgr.ExtractAndStore(ctx, tenantID, userID, sessionID, conversationText)
+//	memories := mgr.Recall(ctx, tenantID, userID, sessionID, userQuery)
 //	// memories is injected into the agent's system prompt.
 type Manager struct {
 	store     Store
@@ -27,20 +27,17 @@ type Manager struct {
 	batch     BatchStore
 	extractor Extractor
 	mu        sync.RWMutex
-	// Optional hooks for observability (Phase 4: tracing).
-	OnExtract func(userID string, factCount int)
-	OnRecall  func(userID string, query string, resultCount int)
+	OnExtract func(tenantID, userID string, factCount int)
+	OnRecall  func(tenantID, userID string, query string, resultCount int)
 }
 
 // BatchStore is an optional interface that Store implementations may
 // satisfy when they can persist multiple facts in one request.
 type BatchStore interface {
-	SetBatch(ctx context.Context, userID string, entries map[string]string) error
+	SetBatch(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string) error
 }
 
 // NewManager creates a memory manager backed by the given store.
-// Extraction defaults to the heuristic extractor — call WithExtractor
-// to inject an LLM-based extractor for richer fact coverage.
 func NewManager(store Store) *Manager {
 	mgr := &Manager{
 		store:     store,
@@ -56,21 +53,20 @@ func NewManager(store Store) *Manager {
 }
 
 // WithExtractor sets the extractor used by ExtractAndStore.
-// Call before ExtractAndStore (not goroutine-safe after first use).
 func (m *Manager) WithExtractor(e Extractor) *Manager {
 	m.extractor = e
 	return m
 }
 
-// Recall retrieves relevant memories for a query.
+// Recall retrieves relevant memories for a query scoped to a tenant/user/session.
 // Returns a formatted string suitable for injection into a system prompt.
 // Returns empty string if no memories or store error.
-func (m *Manager) Recall(ctx context.Context, userID, query string) string {
+func (m *Manager) Recall(ctx context.Context, tenantID, userID, sessionID, query string) string {
 	if m.cognitive != nil {
-		activated, err := m.cognitive.Activate(ctx, userID, []string{query}, 10)
+		activated, err := m.cognitive.Activate(ctx, tenantID, userID, sessionID, []string{query}, 10)
 		if err == nil && len(activated) > 0 {
 			if m.OnRecall != nil {
-				m.OnRecall(userID, query, len(activated))
+				m.OnRecall(tenantID, userID, query, len(activated))
 			}
 			return FormatActivatedMemories(activated)
 		}
@@ -79,13 +75,13 @@ func (m *Manager) Recall(ctx context.Context, userID, query string) string {
 		}
 	}
 
-	entries, err := m.store.Search(ctx, userID, query, 10)
+	entries, err := m.store.Search(ctx, tenantID, query, 10, ByUserID(userID), BySessionID(sessionID))
 	if err != nil {
 		slog.Warn("memory recall failed", "error", err)
 		return ""
 	}
 	if m.OnRecall != nil {
-		m.OnRecall(userID, query, len(entries))
+		m.OnRecall(tenantID, userID, query, len(entries))
 	}
 	if len(entries) == 0 {
 		return ""
@@ -107,28 +103,26 @@ func FormatMemories(entries []MemoryEntry) string {
 }
 
 // ExtractAndStore uses the configured extractor to pull facts from a user
-// message and stores them in the backing store. Defaults to heuristic
-// extraction; set WithExtractor to switch to LLM-based extraction.
-//
-// When extraction produces no facts, ExtractAndStore is a no-op (not an error).
-func (m *Manager) ExtractAndStore(ctx context.Context, userID, text string) error {
+// message and stores them in the backing store, scoped to the given
+// tenant/user/session.
+func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, sessionID, text string) error {
 	facts, err := m.extractor.Extract(ctx, text)
 	if err != nil {
 		slog.Warn("memory extraction failed", "error", err)
-		return nil // degraded: don't block the conversation on extraction failure
+		return nil
 	}
 	if len(facts) == 0 {
 		return nil
 	}
 	stored := len(facts)
 	if m.batch != nil {
-		if err := m.batch.SetBatch(ctx, userID, facts); err != nil {
+		if err := m.batch.SetBatch(ctx, tenantID, userID, sessionID, facts); err != nil {
 			slog.Warn("memory batch store failed", "error", err)
 			stored = 0
 		}
 	} else {
 		for key, value := range facts {
-			if err := m.store.Set(ctx, userID, key, value); err != nil {
+			if err := m.store.Set(ctx, tenantID, userID, sessionID, key, value); err != nil {
 				slog.Warn("memory store failed", "key", key, "error", err)
 				stored--
 				continue
@@ -136,113 +130,14 @@ func (m *Manager) ExtractAndStore(ctx context.Context, userID, text string) erro
 		}
 	}
 	if m.OnExtract != nil && stored > 0 {
-		m.OnExtract(userID, stored)
+		m.OnExtract(tenantID, userID, stored)
 	}
 	return nil
 }
 
-// extractHeuristic returns key/value pairs derived from text.
-// This is intentionally minimal; production systems should use an LLM.
-func extractHeuristic(text string) map[string]string {
-	lower := strings.ToLower(text)
-	facts := map[string]string{}
-
-	// Name patterns
-	if idx := strings.Index(lower, "my name is "); idx >= 0 {
-		rest := text[idx+len("my name is "):]
-		name := firstWord(rest)
-		if name != "" {
-			facts["user.name"] = name
-		}
-	}
-	if idx := strings.Index(lower, "i'm "); idx >= 0 {
-		rest := text[idx+len("i'm "):]
-		name := firstWord(rest)
-		if isValidName(name) {
-			facts["user.name"] = name
-		}
-	}
-
-	// Location patterns
-	if idx := strings.Index(lower, "i live in "); idx >= 0 {
-		rest := text[idx+len("i live in "):]
-		loc := firstPhrase(rest)
-		if loc != "" {
-			facts["user.location"] = loc
-		}
-	}
-	if idx := strings.Index(lower, "i'm from "); idx >= 0 {
-		rest := text[idx+len("i'm from "):]
-		loc := firstPhrase(rest)
-		if loc != "" {
-			facts["user.location"] = loc
-		}
-	}
-
-	// Preferences
-	for _, prefix := range []string{"i like ", "i prefer ", "i love ", "i use "} {
-		if idx := strings.Index(lower, prefix); idx >= 0 {
-			rest := text[idx+len(prefix):]
-			item := firstPhrase(rest)
-			if item != "" {
-				key := "preferences." + strings.ReplaceAll(strings.ToLower(item), " ", "_")
-				facts[key] = item
-			}
-			break
-		}
-	}
-
-	return facts
-}
-
-func firstWord(s string) string {
-	s = strings.TrimSpace(s)
-	for i, ch := range s {
-		if ch == ' ' || ch == ',' || ch == '.' || ch == '!' || ch == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}
-
-func firstPhrase(s string) string {
-	s = strings.TrimSpace(s)
-	for i, ch := range s {
-		if ch == '.' || ch == '!' || ch == '?' || ch == '\n' {
-			return s[:i]
-		}
-	}
-	// Cut at trailing comma if phrase looks complete
-	if idx := strings.Index(s, ", "); idx > 0 {
-		return s[:idx]
-	}
-	return s
-}
-
-func isValidName(s string) bool {
-	if len(s) < 2 || len(s) > 30 {
-		return false
-	}
-	// Reject common false positives
-	switch strings.ToLower(s) {
-	case "not", "sure", "sorry", "happy", "sad", "tired", "hungry", "going":
-		return false
-	}
-	// Should start with a letter
-	if !isAlpha(s[0]) {
-		return false
-	}
-	return true
-}
-
-func isAlpha(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-// PurgeOlderThan removes entries older than the given duration.
-// Useful for periodic cleanup.
-func (m *Manager) PurgeOlderThan(ctx context.Context, userID string, age time.Duration) (int, error) {
-	entries, err := m.store.List(ctx, userID)
+// PurgeOlderThan removes entries older than the given duration within a tenant.
+func (m *Manager) PurgeOlderThan(ctx context.Context, tenantID string, age time.Duration) (int, error) {
+	entries, err := m.store.List(ctx, tenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -250,7 +145,7 @@ func (m *Manager) PurgeOlderThan(ctx context.Context, userID string, age time.Du
 	removed := 0
 	for _, e := range entries {
 		if e.UpdatedAt.Before(cutoff) {
-			if err := m.store.Delete(ctx, userID, e.Key); err != nil {
+			if err := m.store.Delete(ctx, tenantID, e.UserID, e.SessionID, e.Key); err != nil {
 				continue
 			}
 			removed++
