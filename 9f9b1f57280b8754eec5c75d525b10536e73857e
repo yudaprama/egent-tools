@@ -1,0 +1,19 @@
+knowledge/service.go
+  s_546033388bac3b::t_5763479ce862df 103-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "9f9b1f57280b8754eec5c75d525b10536e73857e",
+  "prompts": {},
+  "sessions": {
+    "s_546033388bac3b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0b026edcdffehr4r4Ri7gYJOT0",
+        "model": "hy3-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
