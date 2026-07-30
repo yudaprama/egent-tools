@@ -1,0 +1,39 @@
+memory/muninn_store_test.go
+  s_e682e1f8a1e047::t_bd4e3f03a7c1a6 217,237
+  s_e682e1f8a1e047::t_c19ff20fe5de03 22-25,75,98,113-116,124,143,146,172,175,188-189,199,205,208,227,232-236,238-255,260
+memory/tools.go
+  s_e682e1f8a1e047::t_51f3007b946fdd 14-18,21-22,24-36,50-58,99-102,107-108,140-143,148-149,171,187-189,201,204,216,222-224,262-265,270-271
+  s_e682e1f8a1e047::t_9a3b9800971a56 194,226
+  s_e682e1f8a1e047::t_1d972b692bfa41 49
+memory/store.go
+  s_e682e1f8a1e047::t_67898913177d42 39-40,44-45
+  s_e682e1f8a1e047::t_ee1cedcccddc87 12-13,19-20,22-38,41-43,46,51,56,58,62,64,68
+memory/manager.go
+  s_e682e1f8a1e047::t_c421ee3bb71cc8 78
+  s_e682e1f8a1e047::t_06d206877895df 133
+  s_e682e1f8a1e047::t_bdcde347c3b52b 21-22,30-31,37,61,64,66,69,84,106-108,112,119,125,138-140,148
+memory/extractor.go
+  s_e682e1f8a1e047::t_b3e68cad09ff2a 116-204
+memory/muninn_store.go
+  s_e682e1f8a1e047::t_044a3cf40821a1 233,272
+  s_e682e1f8a1e047::t_f50ab30fd40cf5 19-21,23-26,31-33,37,46,53,57-61,78-93,96-97,99,102-103,106,109,112-113,116,119,121-124,126,130,135,144,147,156,167,174-176,178-181,188-190,196,205-208,211,215-216,222,225,232,234-236,241-252,259-266,271,273-279,285,291-295,299-300,318,323-325,332-333,388-440,443,445-448,455,459-460
+memory/store_noop_test.go
+  s_e682e1f8a1e047::t_8865b6605f9942 12,15,19,32
+  s_e682e1f8a1e047::t_2bd83b5e40777b 22,25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "93d0bdfee9dfc675b6a3bdfff35e81b5435d526b",
+  "prompts": {},
+  "sessions": {
+    "s_e682e1f8a1e047": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04eb53ed7ffesdqCryTtV3kNBI",
+        "model": "kawai-pro-max"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
