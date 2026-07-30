@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,17 @@ func (m *Manager) Recall(ctx context.Context, tenantID, userID, sessionID, query
 	return FormatMemories(entries)
 }
 
+// SaveTurn persists a raw Q&A conversation turn scoped to the given
+// tenant/user/session: the question becomes the concept, the answer becomes
+// the content, tagged with [user:<userID>, session:<sessionID>]. Unlike
+// ExtractAndStore (which runs an LLM/heuristic extractor over the text), this
+// stores the verbatim exchange so it can be recalled as conversation history.
+// Best-effort: callers should run it asynchronously and never block a
+// response on it.
+func (m *Manager) SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error {
+	return m.store.SaveTurn(ctx, tenantID, userID, sessionID, question, answer)
+}
+
 // FormatMemories renders memory entries as a context block.
 func FormatMemories(entries []MemoryEntry) string {
 	if len(entries) == 0 {
@@ -152,6 +164,31 @@ func (m *Manager) PurgeOlderThan(ctx context.Context, tenantID string, age time.
 		}
 	}
 	return removed, nil
+}
+
+// NewManagerFromEnv builds a memory.Manager from the MUNINN_URL env var. When
+// MUNINN_URL is unset, returns a Manager backed by NoopStore (every recall/save
+// is a no-op) so an egent boots in dev/CI without MuninnDB. When set, it
+// constructs a MuninnStore using edge-auth via MUNINN_TRUST_EDGE_HEADER
+// (default "X-Tenant-Id") and fatals if the server is unreachable. The
+// returned cleanup func is always non-nil and safe to defer.
+func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
+	muninnURL := os.Getenv("MUNINN_URL")
+	if muninnURL == "" {
+		slog.Warn("memory: MUNINN_URL unset — using NoopStore (recall/save are no-ops)")
+		return NewManager(NoopStore{}), func() {}
+	}
+	trustHeader := os.Getenv("MUNINN_TRUST_EDGE_HEADER")
+	if trustHeader == "" {
+		trustHeader = "X-Tenant-Id"
+	}
+	s := NewMuninnStoreWithTrustHeader(muninnURL, os.Getenv("MUNINN_TOKEN"), trustHeader)
+	if !s.Health(ctx) {
+		slog.Error("memory: MuninnDB configured but unreachable at startup", "url", muninnURL)
+		os.Exit(1)
+	}
+	slog.Info("memory: MuninnDB store enabled", "url", muninnURL)
+	return NewManager(s), func() {}
 }
 
 // ErrStoreUnavailable is returned when the memory store is not initialized.

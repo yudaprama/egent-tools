@@ -24,6 +24,11 @@ type Store interface {
 	Delete(ctx context.Context, tenantID, userID, sessionID, key string) error
 	Search(ctx context.Context, tenantID, query string, limit int, opts ...SearchOption) ([]MemoryEntry, error)
 	List(ctx context.Context, tenantID string, opts ...SearchOption) ([]MemoryEntry, error)
+	// SaveTurn persists a raw conversation turn: question becomes the concept,
+	// answer becomes the content, tagged with [user:<userID>, session:<sessionID>].
+	// Unlike Set (key→concept), SaveTurn stores the verbatim Q&A pair so it can
+	// be recalled as conversation history rather than an extracted fact.
+	SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error
 }
 
 // SearchFilter carries optional filter parameters for Search and List.
@@ -68,3 +73,5 @@ func (NoopStore) Search(_ context.Context, _ string, _ string, _ int, _ ...Searc
 func (NoopStore) List(_ context.Context, _ string, _ ...SearchOption) ([]MemoryEntry, error) {
 	return nil, nil
 }
+
+func (NoopStore) SaveTurn(_ context.Context, _, _, _, _, _ string) error { return nil }

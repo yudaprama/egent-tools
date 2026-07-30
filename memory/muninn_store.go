@@ -131,6 +131,24 @@ func (s *MuninnStore) Set(ctx context.Context, tenantID, userID, sessionID, key,
 	return nil
 }
 
+// SaveTurn stores a raw conversation turn as a single engram. The question
+// becomes the concept (capped at maxConceptRunes for MuninnDB's 512-byte
+// Concept field), the answer becomes the content, and tags are exactly
+// [user:<userID>, session:<sessionID>] — the only scoping tags Recall/Search
+// filter on. Used by the egent handler to persist every Q&A pair so it can be
+// recalled as conversation history without the client resending prior turns.
+func (s *MuninnStore) SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error {
+	concept := truncateRunes(question, maxConceptRunes)
+	tags := []string{"user:" + userID, "session:" + sessionID}
+
+	id, err := s.client.Write(s.ctxWithVault(ctx, tenantID), tenantID, concept, answer, tags)
+	if err != nil {
+		return fmt.Errorf("muninn save turn: %w", err)
+	}
+	s.setIDCache(tenantID, userID, sessionID, concept, id)
+	return nil
+}
+
 // SetBatch stores multiple memories in a single MuninnDB batch call.
 func (s *MuninnStore) SetBatch(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string) error {
 	if len(entries) == 0 {
@@ -469,6 +487,24 @@ func unixToTime(ts int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(ts, 0)
+}
+
+// maxConceptRunes caps a turn's concept (the user's question). MuninnDB's
+// Engram.Concept field holds up to 512 bytes; rune-counting keeps multi-byte
+// (CJK/emoji) questions safely under that limit.
+const maxConceptRunes = 400
+
+// truncateRunes returns s truncated to at most n runes, with an ellipsis when
+// it was shortened.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // IsErrNotFound checks whether err wraps ErrMemoryNotFound.
