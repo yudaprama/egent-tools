@@ -1,0 +1,44 @@
+memory/http.go
+  s_750f5bd6cea492::t_ac6ddb1a4439e0 5
+  s_750f5bd6cea492::t_32d3a8c1616b32 62-79
+memory/http_test.go
+  s_750f5bd6cea492::t_ea9f06b8367b4b 90-92
+  s_750f5bd6cea492::t_23d06a1993d264 108-110
+  s_750f5bd6cea492::t_9a4f836f1f189f 61-67
+  s_750f5bd6cea492::t_be9a7d7fb2f5c5 70
+  s_750f5bd6cea492::t_953e4482e17e8c 23-25,78-80
+  s_750f5bd6cea492::t_111c24b0bd8aee 1-9,19-22,26-60,68-69,71-77,81-89,93-107,111-126,130,132-142
+  s_750f5bd6cea492::t_a86ba8d3932b9a 10-18
+  s_750f5bd6cea492::t_9eba9037419de9 131
+  s_750f5bd6cea492::t_89fc6ce5ff09ce 127-129
+go.mod
+  s_750f5bd6cea492::t_586021d37c6495 7
+  s_750f5bd6cea492::t_5836404cd661cc 27,32,46
+memory/manager.go
+  s_750f5bd6cea492::t_8a4dcadcc0b11d 12-13
+  s_750f5bd6cea492::t_8537d607c11ebe 215-217,235-239,244-245,247,253,261
+  s_750f5bd6cea492::t_8d8a81b708cdbe 46
+  s_750f5bd6cea492::t_0cf12cc548173c 240-243,246,248-252,254-258,260
+  s_750f5bd6cea492::t_c12ce5582a42da 214,234,259,262-263
+  s_750f5bd6cea492::t_89973e49519908 122-124
+memory/extractor.go
+  s_750f5bd6cea492::t_c519f6fbfd96d8 88-89
+go.sum
+  s_750f5bd6cea492::t_93ed189d642954 12-13,25-28,39-40,74,102-103,177-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "5e55aa567e1f01e4c804a664eaeab1cb6fd22d2c",
+  "prompts": {},
+  "sessions": {
+    "s_750f5bd6cea492": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_043aa3079ffe0Su8kGMytXrZmp",
+        "model": "kawai-pro-max"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
