@@ -1,0 +1,57 @@
+memory/store_noop_test.go
+  s_dc70777056c267::t_4e7e6bba93c8f9 40-56
+memory/muninn_store_test.go
+  s_dc70777056c267::t_60659754ee5649 262
+  s_dc70777056c267::t_ddc244e38ad40e 313-325,329-330,332-362
+  s_dc70777056c267::t_7d48fc5e3c7ff2 326-328,331
+  s_dc70777056c267::t_b2942b1640ffa7 76
+  s_dc70777056c267::t_e1cabc34a60fa4 293,295
+  s_dc70777056c267::t_1f81ff63dc2aee 282
+memory/muninn_store.go
+  s_dc70777056c267::t_ec8ad1457aae0b 459
+  s_dc70777056c267::t_dce3b220296ea5 121
+memory/store.go
+  s_dc70777056c267::t_7e1f294557d977 56
+memory/http.go
+  s_dc70777056c267::t_2f93b52d49f962 49-58,60
+  s_42e2dbb1179bd7::t_7507a5e3d4cd66 61
+memory/manager.go
+  s_dc70777056c267::t_de17151cd13482 156
+  s_dc70777056c267::t_598c1562f7d2f1 150-155,157-184
+  s_dc70777056c267::t_4e47e003038137 229-240
+memory/tools.go
+  s_3008b2f085426b::t_6585550f9a8339 7
+  s_3008b2f085426b::t_e7e07c9f86bf5e 278-335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "adef7f54a55320f002c806f69e33d3eac94e303b",
+  "prompts": {},
+  "sessions": {
+    "s_3008b2f085426b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_047ffa724ffe5UopGkgHna1nYn",
+        "model": "glm-5.2"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    },
+    "s_42e2dbb1179bd7": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04340fcb6ffe5ZSOBZA1O2SC8z",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    },
+    "s_dc70777056c267": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04540b2b5ffeSA13r6tN9z60Ba",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
