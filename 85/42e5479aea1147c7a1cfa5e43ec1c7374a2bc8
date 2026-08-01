@@ -1,0 +1,19 @@
+go.mod
+  s_14b34f0dd023aa::t_953c6b658e7b43 19-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "8542e5479aea1147c7a1cfa5e43ec1c7374a2bc8",
+  "prompts": {},
+  "sessions": {
+    "s_14b34f0dd023aa": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0413d3759ffepBBlNNB6Fg0xLA",
+        "model": "ling-3.0-flash-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
