@@ -12,21 +12,8 @@ import (
 )
 
 // Extractor extracts key/value facts from conversation text.
-// Implementations range from heuristic pattern-matching to LLM-based extraction.
 type Extractor interface {
 	Extract(ctx context.Context, text string) (map[string]string, error)
-}
-
-// HeuristicExtractor uses string patterns ("my name is", "i like", etc.)
-// to extract facts. Fast, zero-cost, but limited to a handful of patterns.
-type HeuristicExtractor struct{}
-
-func NewHeuristicExtractor() *HeuristicExtractor {
-	return &HeuristicExtractor{}
-}
-
-func (e *HeuristicExtractor) Extract(_ context.Context, text string) (map[string]string, error) {
-	return extractHeuristic(text), nil
 }
 
 // LLMExtractor uses a ChatModel to extract facts from conversation text.
@@ -98,8 +85,8 @@ func (e *LLMExtractor) Extract(ctx context.Context, text string) (map[string]str
 
 	var facts map[string]string
 	if err := json.Unmarshal([]byte(content), &facts); err != nil {
-		slog.Warn("llm extract: failed to parse JSON, falling back to heuristic", "response", content, "error", err)
-		return extractHeuristic(text), nil
+		slog.Warn("llm extract: failed to parse JSON", "response", content, "error", err)
+		return map[string]string{}, nil
 	}
 
 	// Normalise boolean-ish preference values
@@ -113,93 +100,4 @@ func (e *LLMExtractor) Extract(ctx context.Context, text string) (map[string]str
 	}
 
 	return facts, nil
-}
-
-// extractHeuristic returns key/value pairs derived from text.
-func extractHeuristic(text string) map[string]string {
-	lower := strings.ToLower(text)
-	facts := map[string]string{}
-
-	if idx := strings.Index(lower, "my name is "); idx >= 0 {
-		rest := text[idx+len("my name is "):]
-		name := firstWord(rest)
-		if name != "" {
-			facts["user.name"] = name
-		}
-	}
-	if idx := strings.Index(lower, "i'm "); idx >= 0 {
-		rest := text[idx+len("i'm "):]
-		name := firstWord(rest)
-		if isValidName(name) {
-			facts["user.name"] = name
-		}
-	}
-	if idx := strings.Index(lower, "i live in "); idx >= 0 {
-		rest := text[idx+len("i live in "):]
-		loc := firstPhrase(rest)
-		if loc != "" {
-			facts["user.location"] = loc
-		}
-	}
-	if idx := strings.Index(lower, "i'm from "); idx >= 0 {
-		rest := text[idx+len("i'm from "):]
-		loc := firstPhrase(rest)
-		if loc != "" {
-			facts["user.location"] = loc
-		}
-	}
-	for _, prefix := range []string{"i like ", "i prefer ", "i love ", "i use "} {
-		if idx := strings.Index(lower, prefix); idx >= 0 {
-			rest := text[idx+len(prefix):]
-			item := firstPhrase(rest)
-			if item != "" {
-				key := "preferences." + strings.ReplaceAll(strings.ToLower(item), " ", "_")
-				facts[key] = item
-			}
-			break
-		}
-	}
-
-	return facts
-}
-
-func firstWord(s string) string {
-	s = strings.TrimSpace(s)
-	for i, ch := range s {
-		if ch == ' ' || ch == ',' || ch == '.' || ch == '!' || ch == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}
-
-func firstPhrase(s string) string {
-	s = strings.TrimSpace(s)
-	for i, ch := range s {
-		if ch == '.' || ch == '!' || ch == '?' || ch == '\n' {
-			return s[:i]
-		}
-	}
-	if idx := strings.Index(s, ", "); idx > 0 {
-		return s[:idx]
-	}
-	return s
-}
-
-func isValidName(s string) bool {
-	if len(s) < 2 || len(s) > 30 {
-		return false
-	}
-	switch strings.ToLower(s) {
-	case "not", "sure", "sorry", "happy", "sad", "tired", "hungry", "going":
-		return false
-	}
-	if !isAlpha(s[0]) {
-		return false
-	}
-	return true
-}
-
-func isAlpha(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

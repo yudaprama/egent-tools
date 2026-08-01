@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cloudwego/eino-ext/components/model/openai"
 )
 
 // Manager coordinates memory extraction, persistence, and retrieval
@@ -41,8 +43,7 @@ type BatchStore interface {
 // NewManager creates a memory manager backed by the given store.
 func NewManager(store Store) *Manager {
 	mgr := &Manager{
-		store:     store,
-		extractor: NewHeuristicExtractor(),
+		store: store,
 	}
 	if cognitive, ok := store.(CognitiveStore); ok {
 		mgr.cognitive = cognitive
@@ -118,6 +119,9 @@ func FormatMemories(entries []MemoryEntry) string {
 // message and stores them in the backing store, scoped to the given
 // tenant/user/session.
 func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, sessionID, text string) error {
+	if m.extractor == nil {
+		return nil
+	}
 	facts, err := m.extractor.Extract(ctx, text)
 	if err != nil {
 		slog.Warn("memory extraction failed", "error", err)
@@ -207,6 +211,10 @@ func (m *Manager) PurgeOlderThan(ctx context.Context, tenantID string, age time.
 // constructs a MuninnStore using edge-auth via MUNINN_TRUST_EDGE_HEADER
 // (default "X-Tenant-Id") and fatals if the server is unreachable. The
 // returned cleanup func is always non-nil and safe to defer.
+//
+// The extractor uses an LLM-backed extractor (OpenAI-compatible via
+// PLANO_LLM_GATEWAY) with MODEL_NAME as the extraction model. Fatal if
+// MODEL_NAME or PLANO_LLM_GATEWAY is not set, or if model creation fails.
 func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
 	muninnURL := os.Getenv("MUNINN_URL")
 	if muninnURL == "" {
@@ -223,7 +231,36 @@ func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
 		os.Exit(1)
 	}
 	slog.Info("memory: MuninnDB store enabled", "url", muninnURL)
-	return NewManager(s), func() {}
+
+	// Build LLM extractor — the only extraction path. Always uses MODEL_NAME
+	// (the egent's primary model) via PLANO_LLM_GATEWAY.
+	modelName := os.Getenv("MODEL_NAME")
+	if modelName == "" {
+		slog.Error("memory: MODEL_NAME must be set for LLM extraction")
+		os.Exit(1)
+	}
+	baseURL := os.Getenv("PLANO_LLM_GATEWAY")
+	if baseURL == "" {
+		slog.Error("memory: PLANO_LLM_GATEWAY must be set for LLM extraction")
+		os.Exit(1)
+	}
+	apiKey := os.Getenv("PLANO_INTERNAL_KEY")
+	if apiKey == "" {
+		apiKey = "EMPTY"
+	}
+	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+		BaseURL: baseURL,
+		Model:   modelName,
+		APIKey:  apiKey,
+	})
+	if err != nil {
+		slog.Error("memory: failed to create LLM extractor", "error", err)
+		os.Exit(1)
+	}
+	mgr := NewManager(s).WithExtractor(NewLLMExtractor(chatModel))
+	slog.Info("memory: LLM extractor enabled", "model", modelName)
+
+	return mgr, func() {}
 }
 
 // RecallProfile retrieves profile-scoped memories (name, email, etc.)

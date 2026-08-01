@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -273,64 +272,6 @@ func (t *MemoryDeleteTool) InvokableRun(ctx context.Context, argsJSON string, _ 
 		return "", err
 	}
 	return fmt.Sprintf("Deleted memory: %s", args.Key), nil
-}
-
-// RememberTool lets the agent persist a concise summary of something durable
-// worth recalling in future conversations (user identity, preferences,
-// decisions, project context). The agent writes a natural-language statement;
-// it is stored as a semantic engram (tagged user-only, cross-session) and
-// recalled automatically via RecallPrefix on later turns — no read tool needed.
-// Use sparingly: only durable facts, never transient queries.
-type RememberTool struct {
-	mgr *Manager
-}
-
-// NewRememberTool builds the single memory-write tool an agent should carry.
-// Prefer this over AllTools() (5 tools) to keep the agent's tool list lean —
-// recall is transparent (RecallPrefix), so only one write tool is needed.
-func NewRememberTool(mgr *Manager) *RememberTool {
-	return &RememberTool{mgr: mgr}
-}
-
-func (t *RememberTool) Info(_ context.Context) (*schema.ToolInfo, error) {
-	return &schema.ToolInfo{
-		Name: "remember",
-		Desc: "Persist a durable fact about the user or the work that should be recalled in future conversations " +
-			"(identity, role, preferences, decisions, project context). Write it as one clear natural-language statement. " +
-			"Do NOT use this for transient questions or anything already in the current conversation.",
-		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"memory": {
-				Desc: "The durable memory as a concise statement, e.g. 'User is a Go backend developer who prefers Indonesian responses and deploys with pnpm.'",
-				Type: schema.String, Required: true,
-			},
-		}),
-	}, nil
-}
-
-func (t *RememberTool) InvokableRun(ctx context.Context, argsJSON string, _ ...tool.Option) (string, error) {
-	var args struct {
-		Memory string `json:"memory"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "", fmt.Errorf("parse args: %w", err)
-	}
-	if strings.TrimSpace(args.Memory) == "" {
-		return "", fmt.Errorf("memory is empty")
-	}
-	tenantID := TenantIDFromContext(ctx)
-	if tenantID == "" {
-		return "", fmt.Errorf("no tenant_id in context")
-	}
-	userID := UserIDFromContext(ctx)
-	if userID == "" {
-		return "", fmt.Errorf("no user_id in context")
-	}
-	// sessionID is intentionally "" so the engram is tagged user-only and
-	// recalled across sessions (not scoped to the current chat).
-	if err := t.mgr.SaveTurn(ctx, tenantID, userID, "", args.Memory, args.Memory); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Remembered: %s", args.Memory), nil
 }
 
 // AllTools returns the standard set of memory tools for the agent.
