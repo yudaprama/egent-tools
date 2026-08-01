@@ -16,6 +16,8 @@ require (
 // (context-carried X-User-Id header) compile from source during local runs.
 replace github.com/scrypster/muninndb/sdk/go/muninn => ../muninndb/sdk/go/muninn
 
+replace github.com/yudaprama/tools => ../tools
+
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
