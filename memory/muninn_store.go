@@ -248,7 +248,7 @@ func (s *MuninnStore) Delete(ctx context.Context, tenantID, userID, sessionID, k
 }
 
 // Search uses MuninnDB's Activate for context-aware retrieval. When
-// ByUserID or BySessionID options are provided, they are converted
+// ByUserID, BySessionID, or ByTag options are provided, they are converted
 // into a tags_all server-side filter so the engine only considers engrams
 // matching those tags.
 func (s *MuninnStore) Search(ctx context.Context, tenantID, query string, limit int, opts ...SearchOption) ([]MemoryEntry, error) {
@@ -261,7 +261,7 @@ func (s *MuninnStore) Search(ctx context.Context, tenantID, query string, limit 
 		o(&filter)
 	}
 
-	filters := tagsAllFilter(filter.UserID, filter.SessionID)
+	filters := tagsAllFilterCombined(filter.UserID, filter.SessionID, filter.Tags)
 	effectiveLimit := limit
 	if len(filters) > 0 {
 		effectiveLimit = limit * 3
@@ -287,7 +287,7 @@ func (s *MuninnStore) Search(ctx context.Context, tenantID, query string, limit 
 }
 
 // List returns all memories for a tenant via paginated ListEngrams.
-// When ByUserID or BySessionID options are provided, results are
+// When ByUserID, BySessionID, or ByTag options are provided, results are
 // filtered client-side (MuninnDB ListEngrams does not support tag filters).
 func (s *MuninnStore) List(ctx context.Context, tenantID string, opts ...SearchOption) ([]MemoryEntry, error) {
 	var filter SearchFilter
@@ -308,6 +308,9 @@ func (s *MuninnStore) List(ctx context.Context, tenantID string, opts ...SearchO
 		for _, item := range resp.Engrams {
 			uid, sid := extractUserSessionFromTags(item.Tags)
 			if !passesUserSessionFilter(uid, sid, filter) {
+				continue
+			}
+			if len(filter.Tags) > 0 && !passesTagFilter(item.Tags, filter.Tags) {
 				continue
 			}
 			s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
@@ -416,6 +419,39 @@ func tagsAllFilter(userID, sessionID string) []muninn.Filter {
 		return nil
 	}
 	return []muninn.Filter{{Field: "tags_all", Op: "all", Value: tagsAll}}
+}
+
+// tagsAllFilterCombined builds a single tags_all filter merging user/session
+// identity tags with any additional caller-supplied tags.
+func tagsAllFilterCombined(userID, sessionID string, extraTags []string) []muninn.Filter {
+	var tagsAll []string
+	if userID != "" {
+		tagsAll = append(tagsAll, "user:"+userID)
+	}
+	if sessionID != "" {
+		tagsAll = append(tagsAll, "session:"+sessionID)
+	}
+	tagsAll = append(tagsAll, extraTags...)
+	if len(tagsAll) == 0 {
+		return nil
+	}
+	return []muninn.Filter{{Field: "tags_all", Op: "all", Value: tagsAll}}
+}
+
+// passesTagFilter checks whether the engram's tags include ALL of the
+// required tags. Used for client-side filtering on List (which does not
+// support server-side tag filters).
+func passesTagFilter(engramTags, requiredTags []string) bool {
+	set := make(map[string]struct{}, len(engramTags))
+	for _, t := range engramTags {
+		set[t] = struct{}{}
+	}
+	for _, req := range requiredTags {
+		if _, ok := set[req]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // tagsForKey builds the tag list for an engram write.

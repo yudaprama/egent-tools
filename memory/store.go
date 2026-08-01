@@ -32,10 +32,11 @@ type Store interface {
 }
 
 // SearchFilter carries optional filter parameters for Search and List.
-// When both are empty, results span the entire tenant (cross-user).
+// When all fields are empty, results span the entire tenant (cross-user).
 type SearchFilter struct {
 	UserID    string
 	SessionID string
+	Tags      []string // When non-empty, results must contain ALL listed tags.
 }
 
 // SearchOption configures a SearchFilter.
@@ -49,6 +50,14 @@ func ByUserID(uid string) SearchOption {
 // BySessionID filters results to memories belonging to a specific session.
 func BySessionID(sid string) SearchOption {
 	return func(f *SearchFilter) { f.SessionID = sid }
+}
+
+// ByTag filters results to memories that carry ALL of the given tags.
+// Tags are the short labels stored on each engram (e.g. "memory",
+// "user:<uid>", "preferences", "user"). The match is AND-based:
+// every tag in the list must be present on the engram.
+func ByTag(tags ...string) SearchOption {
+	return func(f *SearchFilter) { f.Tags = append(f.Tags, tags...) }
 }
 
 // NoopStore is a stateless Store that persists nothing and recalls nothing.

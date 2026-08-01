@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -250,6 +251,62 @@ func TestMuninnStore_SearchPassesTagFilters(t *testing.T) {
 	}
 	if filters[0].Field != "tags_all" {
 		t.Fatalf("expected tags_all filter, got %s", filters[0].Field)
+	}
+}
+
+func TestMuninnStore_SearchByTagCombinesFilters(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+	ctx := context.Background()
+
+	results, err := store.Search(ctx, "t1", "name", 5, ByUserID("u1"), ByTag("memory"))
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	filters := fixture.activates[0].Req.Filters
+	if len(filters) != 1 {
+		t.Fatalf("expected 1 combined filter, got %d", len(filters))
+	}
+	// JSON unmarshal produces []interface{}, so check via string conversion
+	values, ok := filters[0].Value.([]interface{})
+	if !ok {
+		t.Fatalf("expected []interface{} value, got %T", filters[0].Value)
+	}
+	got := make(map[string]bool, len(values))
+	for _, v := range values {
+		got[fmt.Sprint(v)] = true
+	}
+	for _, want := range []string{"user:u1", "memory"} {
+		if !got[want] {
+			t.Fatalf("expected tags_all to contain %q, got %v", want, values)
+		}
+	}
+}
+
+func TestMuninnStore_ListFiltersByTag(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+
+	// The fixture returns one engram with tags ["memory", "user:u1", "session:s1"].
+	// Searching with a matching tag should return the entry.
+	entries, err := store.List(context.Background(), "t1", ByTag("memory"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry with matching tag, got %d", len(entries))
+	}
+
+	// Searching with a non-matching tag should return nothing.
+	entries, err = store.List(context.Background(), "t1", ByTag("nonexistent"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries with non-matching tag, got %d", len(entries))
 	}
 }
 
