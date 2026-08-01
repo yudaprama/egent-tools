@@ -1,0 +1,29 @@
+memory/store.go
+  s_dc70777056c267::t_25d5291bf02c8f 35,39,55-60
+  s_dc70777056c267::t_e8466e952687c3 61-62
+memory/muninn_store.go
+  s_dc70777056c267::t_9c79fcc45a8bdf 424-456
+  s_dc70777056c267::t_12cf85cff73d1a 251,264
+  s_dc70777056c267::t_63f1608f84aec2 290,313
+  s_dc70777056c267::t_57980e03962147 314-315
+memory/muninn_store_test.go
+  s_dc70777056c267::t_e457b578025863 257-272,275,277,281,285-312
+  s_dc70777056c267::t_3385b3114af57b 273-274,276,278-280,282-284
+  s_dc70777056c267::t_9cb2f27f3cf31c 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "971039aed43b80717697d57938b082017dc1172b",
+  "prompts": {},
+  "sessions": {
+    "s_dc70777056c267": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_04540b2b5ffeSA13r6tN9z60Ba",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
