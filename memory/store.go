@@ -53,7 +53,7 @@ func BySessionID(sid string) SearchOption {
 }
 
 // ByTag filters results to memories that carry ALL of the given tags.
-// Tags are the short labels stored on each engram (e.g. "memory",
+// Tags are the short labels stored on each engram (e.g.
 // "user:<uid>", "preferences", "user"). The match is AND-based:
 // every tag in the list must be present on the engram.
 func ByTag(tags ...string) SearchOption {

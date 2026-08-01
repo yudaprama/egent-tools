@@ -147,6 +147,41 @@ func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, session
 	return nil
 }
 
+// IngestProfile writes structured profile facts (name, email, join date)
+// directly to the store. Unlike ExtractAndStore (which runs an LLM over
+// conversation text), this stores caller-provided key/value pairs with no
+// extraction step — intended for registration-time data that is already
+// known.
+//
+// Tags are set automatically: "user:<userID>" and the key prefix
+// (e.g. "user" for "user.email"). The caller should pass an empty sessionID
+// since profile facts are session-independent.
+func (m *Manager) IngestProfile(ctx context.Context, tenantID, userID string, facts map[string]string) error {
+	if len(facts) == 0 {
+		return nil
+	}
+	stored := 0
+	if m.batch != nil {
+		if err := m.batch.SetBatch(ctx, tenantID, userID, "", facts); err != nil {
+			slog.Warn("memory profile batch store failed", "error", err)
+		} else {
+			stored = len(facts)
+		}
+	} else {
+		for key, value := range facts {
+			if err := m.store.Set(ctx, tenantID, userID, "", key, value); err != nil {
+				slog.Warn("memory profile store failed", "key", key, "error", err)
+				continue
+			}
+			stored++
+		}
+	}
+	if m.OnExtract != nil && stored > 0 {
+		m.OnExtract(tenantID, userID, stored)
+	}
+	return nil
+}
+
 // PurgeOlderThan removes entries older than the given duration within a tenant.
 func (m *Manager) PurgeOlderThan(ctx context.Context, tenantID string, age time.Duration) (int, error) {
 	entries, err := m.store.List(ctx, tenantID)
@@ -189,6 +224,18 @@ func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
 	}
 	slog.Info("memory: MuninnDB store enabled", "url", muninnURL)
 	return NewManager(s), func() {}
+}
+
+// RecallProfile retrieves profile-scoped memories (name, email, etc.)
+// for the given user and returns them as a context block. Returns empty
+// string when no profile data exists or the store is unavailable.
+func (m *Manager) RecallProfile(ctx context.Context, tenantID, userID string) string {
+	entries, err := m.store.List(ctx, tenantID, ByUserID(userID), ByTag("profile"))
+	if err != nil {
+		slog.Warn("memory profile recall failed", "error", err)
+		return ""
+	}
+	return FormatMemories(entries)
 }
 
 // ErrStoreUnavailable is returned when the memory store is not initialized.

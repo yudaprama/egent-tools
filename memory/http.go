@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 )
 
@@ -47,20 +46,16 @@ func (m *Manager) RecallPrefix(ctx context.Context, id Identity, query string) s
 	return mem + "\n\n" + query
 }
 
-// SaveTurnAsync persists a raw Q&A conversation turn in a background goroutine
-// so a response is never blocked on memory persistence. Errors are logged only.
-// It is a no-op when the manager is backed by a NoopStore (MUNINN_URL unset).
-// The request context is detached (context.WithoutCancel) so the save survives
-// the request completing — values are preserved, cancellation/deadline is not.
-func (m *Manager) SaveTurnAsync(ctx context.Context, id Identity, question, answer string) {
-	go func() {
-		if answer == "" {
-			return
-		}
-		ctx := context.WithoutCancel(ctx)
-		if err := m.store.SaveTurn(ctx, id.TenantID, id.UserID, id.SessionID, question, answer); err != nil {
-			// Best-effort: log and move on. The response already went out.
-			slog.Warn("memory: save turn failed", "err", err)
-		}
-	}()
+// ProfilePrefix retrieves profile-scoped memories (name, email, etc.) for the
+// user and, when non-empty, prepends them to the query so the agent always
+// has basic identity context regardless of what the user asks about. Returns
+// query unchanged when no profile data exists.
+func (m *Manager) ProfilePrefix(ctx context.Context, id Identity, query string) string {
+	mem := m.RecallProfile(ctx, id.TenantID, id.UserID)
+	if mem == "" {
+		return query
+	}
+	return mem + "\n\n" + query
 }
+
+

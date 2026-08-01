@@ -37,3 +37,20 @@ func TestNoopStore_ManagerRecallNoop(t *testing.T) {
 		t.Fatal("AllTools: expected tools, got none")
 	}
 }
+
+func TestNoopStore_IngestProfileNoop(t *testing.T) {
+	mgr := NewManager(NoopStore{})
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", map[string]string{
+		"user.email": "bob@example.com",
+		"user.name":  "Bob",
+	}); err != nil {
+		t.Fatalf("IngestProfile: want nil, got %v", err)
+	}
+}
+
+func TestNoopStore_IngestProfileEmptyNoop(t *testing.T) {
+	mgr := NewManager(NoopStore{})
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", nil); err != nil {
+		t.Fatalf("IngestProfile empty: want nil, got %v", err)
+	}
+}

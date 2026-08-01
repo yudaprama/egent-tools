@@ -118,7 +118,7 @@ func (s *MuninnStore) deleteIDCache(tenant, userID, sessionID, concept string) {
 
 // Set stores a memory as an engram. The tenantID becomes the vault name.
 // The key becomes the concept, the value becomes the content.
-// Tags include "memory", "user:<userID>", "session:<sessionID>", and the
+// Tags include "user:<userID>", "session:<sessionID>", and the
 // key prefix (e.g. "user", "preferences").
 func (s *MuninnStore) Set(ctx context.Context, tenantID, userID, sessionID, key, value string) error {
 	tags := tagsForKey(key, userID, sessionID)
@@ -456,7 +456,7 @@ func passesTagFilter(engramTags, requiredTags []string) bool {
 
 // tagsForKey builds the tag list for an engram write.
 func tagsForKey(key, userID, sessionID string) []string {
-	tags := []string{"memory"}
+	var tags []string
 	if userID != "" {
 		tags = append(tags, "user:"+userID)
 	}

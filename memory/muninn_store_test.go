@@ -73,7 +73,7 @@ func newMuninnFixture(t *testing.T) *muninnFixture {
 						ID:        "id-user-name",
 						Concept:   "user.name",
 						Content:   "Alice",
-						Tags:      []string{"memory", "user:u1", "session:s1"},
+						Tags:      []string{"user:u1", "session:s1"},
 						Vault:     r.URL.Query().Get("vault"),
 						CreatedAt: 1700000001,
 					},
@@ -259,7 +259,7 @@ func TestMuninnStore_SearchByTagCombinesFilters(t *testing.T) {
 	store := NewMuninnStore(fixture.server.URL, "")
 	ctx := context.Background()
 
-	results, err := store.Search(ctx, "t1", "name", 5, ByUserID("u1"), ByTag("memory"))
+	results, err := store.Search(ctx, "t1", "name", 5, ByUserID("u1"), ByTag("session:s1"))
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestMuninnStore_SearchByTagCombinesFilters(t *testing.T) {
 	for _, v := range values {
 		got[fmt.Sprint(v)] = true
 	}
-	for _, want := range []string{"user:u1", "memory"} {
+	for _, want := range []string{"user:u1", "session:s1"} {
 		if !got[want] {
 			t.Fatalf("expected tags_all to contain %q, got %v", want, values)
 		}
@@ -290,9 +290,9 @@ func TestMuninnStore_ListFiltersByTag(t *testing.T) {
 	fixture := newMuninnFixture(t)
 	store := NewMuninnStore(fixture.server.URL, "")
 
-	// The fixture returns one engram with tags ["memory", "user:u1", "session:s1"].
+	// The fixture returns one engram with tags ["user:u1", "session:s1"].
 	// Searching with a matching tag should return the entry.
-	entries, err := store.List(context.Background(), "t1", ByTag("memory"))
+	entries, err := store.List(context.Background(), "t1", ByTag("user:u1"))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -307,6 +307,56 @@ func TestMuninnStore_ListFiltersByTag(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected 0 entries with non-matching tag, got %d", len(entries))
+	}
+}
+
+func TestManager_IngestProfileWritesToStore(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+	mgr := NewManager(store)
+
+	facts := map[string]string{
+		"user.email": "bob@example.com",
+		"user.name":  "Bob",
+	}
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", facts); err != nil {
+		t.Fatalf("IngestProfile: %v", err)
+	}
+
+	// MuninnStore satisfies BatchStore, so Manager uses SetBatch.
+	if len(fixture.batchWrites) != 2 {
+		t.Fatalf("expected 2 batch writes, got %d", len(fixture.batchWrites))
+	}
+
+	for _, w := range fixture.batchWrites {
+		if w.Vault != "t1" {
+			t.Errorf("expected vault t1, got %s", w.Vault)
+		}
+		hasUserTag := false
+		for _, tag := range w.Tags {
+			if tag == "user:u1" {
+				hasUserTag = true
+			}
+		}
+		if !hasUserTag {
+			t.Errorf("expected user:u1 tag in write for %s, got %v", w.Concept, w.Tags)
+		}
+	}
+}
+
+func TestManager_IngestProfileEmptyNoop(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+	mgr := NewManager(store)
+
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", nil); err != nil {
+		t.Fatalf("IngestProfile nil: %v", err)
+	}
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", map[string]string{}); err != nil {
+		t.Fatalf("IngestProfile empty: %v", err)
+	}
+	if len(fixture.writes) != 0 {
+		t.Fatalf("expected 0 writes for empty profile, got %d", len(fixture.writes))
 	}
 }
 
