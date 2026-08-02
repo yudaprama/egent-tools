@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 
+	scoretransformer "github.com/cloudwego/eino-ext/components/document/transformer/reranker/score"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	fp "github.com/kawai-network/fileprocessor"
@@ -31,7 +31,7 @@ const tracerName = "egent-tools/knowledge"
 type KnowledgeBackend interface {
 	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
 	Searcher() Searcher
-	Rerank(ctx context.Context, query string, documents []string) ([]rerank.RankResult, error)
+	Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error)
 	// GetChunksByIDs fetches parent chunks for context expansion.
 	GetChunksByIDs(ctx context.Context, ids []string) ([]fp.Chunk, error)
 }
@@ -177,36 +177,31 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 	return FormatResults(results, args.Query), nil
 }
 
-// rerankResults applies the rerank model to search results,
-// returning them sorted by relevance score descending, limited
-// to the original result count.
-func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, results []fp.SearchResult) ([]fp.SearchResult, error) {
-	documents := make([]string, len(results))
-	for i, r := range results {
-		documents[i] = r.Text
-	}
-	rankResults, err := t.svc.Rerank(ctx, query, documents)
+// rerankResults applies the rerank model and then positions the scored
+// documents for LLM context using Eino's score transformer.
+func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, results []*schema.Document) ([]*schema.Document, error) {
+	ranked, err := t.svc.Rerank(ctx, query, results)
 	if err != nil {
 		return nil, err
 	}
-	if len(rankResults) == 0 {
+	if len(ranked) == 0 {
 		return nil, nil
 	}
-	for _, rr := range rankResults {
-		if rr.Index >= 0 && rr.Index < len(results) {
-			results[rr.Index].Similarity = rr.RelevanceScore
-		}
+	transformer, err := scoretransformer.NewReranker(ctx, &scoretransformer.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("create score transformer: %w", err)
 	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Similarity > results[j].Similarity
-	})
-	return results, nil
+	placed, err := transformer.Transform(ctx, ranked)
+	if err != nil {
+		return nil, fmt.Errorf("place reranked documents: %w", err)
+	}
+	return placed, nil
 }
 
 // expandParentContext fetches parent chunks for results that have a ParentID,
 // prepending the parent text as context. This gives the LLM broader section
 // context even when only a child chunk matched.
-func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results []fp.SearchResult) []fp.SearchResult {
+func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results []*schema.Document) []*schema.Document {
 	if t.svc == nil || len(results) == 0 {
 		return results
 	}
@@ -214,8 +209,9 @@ func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results [
 	// Collect unique parent IDs.
 	parentIDs := make(map[string]bool)
 	for _, r := range results {
-		if r.ParentID != "" {
-			parentIDs[r.ParentID] = true
+		parentID := fp.DocumentStringMetadata(r, fp.DocumentMetaParentID)
+		if parentID != "" {
+			parentIDs[parentID] = true
 		}
 	}
 	if len(parentIDs) == 0 {
@@ -240,10 +236,11 @@ func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results [
 	}
 
 	// Prepend parent context to child results.
-	expanded := make([]fp.SearchResult, 0, len(results))
+	expanded := make([]*schema.Document, 0, len(results))
 	for _, r := range results {
-		if pt, ok := parentText[r.ParentID]; ok && pt != "" {
-			r.Text = "[Context from section]\n" + pt + "\n\n[Excerpt]\n" + r.Text
+		parentID := fp.DocumentStringMetadata(r, fp.DocumentMetaParentID)
+		if pt, ok := parentText[parentID]; ok && pt != "" {
+			r.Content = "[Context from section]\n" + pt + "\n\n[Excerpt]\n" + r.Content
 		}
 		expanded = append(expanded, r)
 	}
@@ -253,22 +250,22 @@ func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results [
 // FormatResults renders a list of search hits as an LLM-friendly context
 // block. Source filename and similarity score are included so the model can
 // reason about provenance.
-func FormatResults(results []fp.SearchResult, query string) string {
+func FormatResults(results []*schema.Document, query string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Knowledge base results for query: %q (%d hits)\n\n", query, len(results))
 	for i, r := range results {
-		fmt.Fprintf(&b, "[%d] (similarity=%.3f) %s\n", i+1, r.Similarity, sourceLabel(r))
-		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(r.Text))
+		fmt.Fprintf(&b, "[%d] (similarity=%.3f) %s\n", i+1, r.Score(), sourceLabel(r))
+		fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(r.Content))
 	}
 	return b.String()
 }
 
-func sourceLabel(r fp.SearchResult) string {
-	if r.FileName != "" {
-		return "file: " + r.FileName
+func sourceLabel(r *schema.Document) string {
+	if fileName := fp.DocumentStringMetadata(r, fp.DocumentMetaFileName); fileName != "" {
+		return "file: " + fileName
 	}
-	if r.FileID != "" {
-		return "file_id: " + r.FileID
+	if fileID := fp.DocumentStringMetadata(r, fp.DocumentMetaFileID); fileID != "" {
+		return "file_id: " + fileID
 	}
 	return "chunk: " + r.ID
 }

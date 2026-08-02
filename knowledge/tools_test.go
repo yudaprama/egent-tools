@@ -6,21 +6,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/schema"
 	fp "github.com/kawai-network/fileprocessor"
 
 	"github.com/yudaprama/egent-tools/memory"
-	"github.com/yudaprama/egent-tools/rerank"
 )
+
+func newTestDocument(id, content string, score float64, fileID, fileName string) *schema.Document {
+	doc := (&schema.Document{ID: id, Content: content, MetaData: map[string]any{}}).WithScore(score)
+	if fileID != "" {
+		doc.MetaData[fp.DocumentMetaFileID] = fileID
+	}
+	if fileName != "" {
+		doc.MetaData[fp.DocumentMetaFileName] = fileName
+	}
+	return doc
+}
 
 // fakeSearcher is a stand-in for fileprocessor.Searcher used to verify the
 // tool wiring without a real Postgres + pgvector backend.
 type fakeSearcher struct {
-	results []fp.SearchResult
+	results []*schema.Document
 	err     error
 	lastP   fp.SearchParamsSearcher
 }
 
-func (f *fakeSearcher) SemanticSearch(_ context.Context, p fp.SearchParamsSearcher) ([]fp.SearchResult, error) {
+func (f *fakeSearcher) SemanticSearch(_ context.Context, p fp.SearchParamsSearcher) ([]*schema.Document, error) {
 	f.lastP = p
 	if f.err != nil {
 		return nil, f.err
@@ -34,6 +45,7 @@ type fakeService struct {
 	fileIDs        []string
 	projectFileIDs map[string][]string
 	fileErr        error
+	rerankResults  []*schema.Document
 }
 
 func (f *fakeService) UserFileIDs(_ context.Context, _, _, projectID string) ([]string, error) {
@@ -52,8 +64,31 @@ func (f *fakeService) GetChunksByIDs(_ context.Context, _ []string) ([]fp.Chunk,
 	return nil, nil
 }
 
-func (f *fakeService) Rerank(_ context.Context, _ string, _ []string) ([]rerank.RankResult, error) {
-	return nil, nil
+func (f *fakeService) Rerank(_ context.Context, _ string, _ []*schema.Document) ([]*schema.Document, error) {
+	return f.rerankResults, nil
+}
+
+func TestKnowledgeSearchTool_RerankPlacesHighScoresAtContextEdges(t *testing.T) {
+	svc := &fakeService{
+		rerankResults: []*schema.Document{
+			newTestDocument("high", "high", 0.9, "", ""),
+			newTestDocument("medium", "medium", 0.6, "", ""),
+			newTestDocument("low", "low", 0.2, "", ""),
+		},
+	}
+	tl := &KnowledgeSearchTool{svc: svc}
+
+	got, err := tl.rerankResults(context.Background(), "query", svc.rerankResults)
+	if err != nil {
+		t.Fatalf("rerankResults: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 documents, got %d", len(got))
+	}
+	// score transformer order for [high, medium, low] is [high, low, medium].
+	if got[0].ID != "high" || got[1].ID != "low" || got[2].ID != "medium" {
+		t.Fatalf("unexpected context placement: %q, %q, %q", got[0].ID, got[1].ID, got[2].ID)
+	}
 }
 
 func TestKnowledgeSearchTool_Info(t *testing.T) {
@@ -110,21 +145,9 @@ func TestKnowledgeSearchTool_NoFiles(t *testing.T) {
 
 func TestKnowledgeSearchTool_SearchAndFormat(t *testing.T) {
 	srch := &fakeSearcher{
-		results: []fp.SearchResult{
-			{
-				ID:         "chunk-1",
-				Similarity: 0.91,
-				Text:       "Project deadline is next Friday.",
-				FileID:     "file-1",
-				FileName:   "plan.md",
-			},
-			{
-				ID:         "chunk-2",
-				Similarity: 0.78,
-				Text:       "Deploy via `make run`.",
-				FileID:     "file-2",
-				FileName:   "README.md",
-			},
+		results: []*schema.Document{
+			newTestDocument("chunk-1", "Project deadline is next Friday.", 0.91, "file-1", "plan.md"),
+			newTestDocument("chunk-2", "Deploy via `make run`.", 0.78, "file-2", "README.md"),
 		},
 	}
 	svc := &fakeService{
@@ -191,7 +214,7 @@ func TestKnowledgeSearchTool_LimitClampedToMax(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_DefaultLimit(t *testing.T) {
-	srch := &fakeSearcher{results: []fp.SearchResult{{ID: "c1", Text: "x"}}}
+	srch := &fakeSearcher{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
 	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
@@ -211,8 +234,8 @@ func TestFormatResults_Empty(t *testing.T) {
 }
 
 func TestFormatResults_SourceLabelFallback(t *testing.T) {
-	out := FormatResults([]fp.SearchResult{
-		{ID: "chunk-x", Text: "no file"},
+	out := FormatResults([]*schema.Document{
+		{ID: "chunk-x", Content: "no file"},
 	}, "q")
 	if !strings.Contains(out, "chunk: chunk-x") {
 		t.Errorf("expected fallback source label, got %q", out)
@@ -222,7 +245,7 @@ func TestFormatResults_SourceLabelFallback(t *testing.T) {
 // TestKnowledgeSearchTool_ProjectScoping verifies that a project id carried in
 // context scopes retrieval to that project's files rather than the whole user.
 func TestKnowledgeSearchTool_ProjectScoping(t *testing.T) {
-	srch := &fakeSearcher{results: []fp.SearchResult{{ID: "c1", Text: "x"}}}
+	srch := &fakeSearcher{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
 	svc := &fakeService{
 		searcher: srch,
 		fileIDs:  []string{"user-wide-1"},

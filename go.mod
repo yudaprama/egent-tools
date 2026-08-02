@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/cloudwego/eino v0.9.12
+	github.com/cloudwego/eino-ext/components/document/transformer/reranker/score v0.0.0-20260724103301-c9a5dc923462
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/kawai-network/fileprocessor v0.5.2

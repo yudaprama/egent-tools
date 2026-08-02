@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 const defaultNvidiaRerankBaseURL = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
@@ -73,9 +75,9 @@ func NewNvidiaReranker(config *RerankerConfig) (*NvidiaReranker, error) {
 	}, nil
 }
 
-func (r *NvidiaReranker) Rerank(ctx context.Context, query string, documents []string) ([]RankResult, error) {
+func (r *NvidiaReranker) Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error) {
 	if len(documents) == 0 {
-		return []RankResult{}, nil
+		return []*schema.Document{}, nil
 	}
 	requestBody := &NvidiaRerankRequest{
 		Model:     r.modelName,
@@ -83,7 +85,7 @@ func (r *NvidiaReranker) Rerank(ctx context.Context, query string, documents []s
 		Documents: make([]NvidiaRerankDocument, len(documents)),
 	}
 	for i := range requestBody.Documents {
-		requestBody.Documents[i].Text = documents[i]
+		requestBody.Documents[i].Text = documents[i].Content
 	}
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
@@ -114,13 +116,21 @@ func (r *NvidiaReranker) Rerank(ctx context.Context, query string, documents []s
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
-	ret := make([]RankResult, len(response.Results))
-	for i, result := range response.Results {
-		ret[i] = RankResult{
-			Index:          result.Index,
-			Document:       DocumentInfo{Text: documents[result.Index]},
-			RelevanceScore: result.RelevanceScore,
+	ret := make([]*schema.Document, 0, len(response.Results))
+	for _, result := range response.Results {
+		if result.Index < 0 || result.Index >= len(documents) {
+			return nil, fmt.Errorf("rerank API returned invalid document index %d", result.Index)
 		}
+		doc := documents[result.Index]
+		if doc == nil {
+			continue
+		}
+		// Preserve ID and metadata while replacing only the score. The API's
+		// ranking order is retained here; context placement is a separate
+		// document transformer stage.
+		copyDoc := *doc
+		copyDoc.WithScore(result.RelevanceScore)
+		ret = append(ret, &copyDoc)
 	}
 	return ret, nil
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/cloudwego/eino/schema"
 )
 
 type Reranker interface {
-	Rerank(ctx context.Context, query string, documents []string) ([]RankResult, error)
+	Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error)
 	GetModelName() string
 	GetModelID() string
 }
@@ -59,12 +61,12 @@ func (d *DocumentInfo) UnmarshalJSON(data []byte) error {
 }
 
 type RerankerConfig struct {
-	APIKey      string
-	BaseURL     string
-	ModelName   string
-	ModelID     string
-	Provider    string
-	ExtraConfig map[string]string
+	APIKey        string
+	BaseURL       string
+	ModelName     string
+	ModelID       string
+	Provider      string
+	ExtraConfig   map[string]string
 	CustomHeaders map[string]string
 }
 

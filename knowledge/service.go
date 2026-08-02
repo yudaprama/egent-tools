@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	fp "github.com/kawai-network/fileprocessor"
@@ -19,7 +20,7 @@ import (
 // Searcher is the subset of fileprocessor.Searcher that the knowledge tool
 // needs. Defined as an interface so tests can inject a fake.
 type Searcher interface {
-	SemanticSearch(ctx context.Context, p fp.SearchParamsSearcher) ([]fp.SearchResult, error)
+	SemanticSearch(ctx context.Context, p fp.SearchParamsSearcher) ([]*schema.Document, error)
 }
 
 // Service wires a pgvector-backed semantic search over the existing lobehub
@@ -138,7 +139,7 @@ func NewServiceWithRerank(ctx context.Context, pool *pgxpool.Pool, embedder fp.E
 // Rerank applies the rerank model to search results if configured.
 // Returns reranked results sorted by relevance score, or the original
 // results if no rerank model is configured or the rerank call fails.
-func (s *Service) Rerank(ctx context.Context, query string, documents []string) ([]rerank.RankResult, error) {
+func (s *Service) Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error) {
 	if s == nil || s.rerankModel == nil || len(documents) == 0 {
 		return nil, nil
 	}
