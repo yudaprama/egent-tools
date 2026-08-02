@@ -48,6 +48,10 @@ func (f *fakeService) UserFileIDs(_ context.Context, _, _, projectID string) ([]
 
 func (f *fakeService) Searcher() Searcher { return f.searcher }
 
+func (f *fakeService) GetChunksByIDs(_ context.Context, _ []string) ([]fp.Chunk, error) {
+	return nil, nil
+}
+
 func (f *fakeService) Rerank(_ context.Context, _ string, _ []string) ([]rerank.RankResult, error) {
 	return nil, nil
 }

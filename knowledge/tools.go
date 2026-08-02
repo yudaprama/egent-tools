@@ -32,6 +32,8 @@ type KnowledgeBackend interface {
 	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
 	Searcher() Searcher
 	Rerank(ctx context.Context, query string, documents []string) ([]rerank.RankResult, error)
+	// GetChunksByIDs fetches parent chunks for context expansion.
+	GetChunksByIDs(ctx context.Context, ids []string) ([]fp.Chunk, error)
 }
 
 // KnowledgeSearchTool performs semantic search over the current user's
@@ -164,6 +166,9 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		}
 	}
 
+	// Expand results with parent context for richer retrieval.
+	results = t.expandParentContext(ctx, results)
+
 	span.SetStatus(codes.Ok, "")
 	if len(results) == 0 {
 		return fmt.Sprintf("No relevant documents found for query: %q", args.Query), nil
@@ -196,6 +201,53 @@ func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, r
 		return results[i].Similarity > results[j].Similarity
 	})
 	return results, nil
+}
+
+// expandParentContext fetches parent chunks for results that have a ParentID,
+// prepending the parent text as context. This gives the LLM broader section
+// context even when only a child chunk matched.
+func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results []fp.SearchResult) []fp.SearchResult {
+	if t.svc == nil || len(results) == 0 {
+		return results
+	}
+
+	// Collect unique parent IDs.
+	parentIDs := make(map[string]bool)
+	for _, r := range results {
+		if r.ParentID != "" {
+			parentIDs[r.ParentID] = true
+		}
+	}
+	if len(parentIDs) == 0 {
+		return results
+	}
+
+	ids := make([]string, 0, len(parentIDs))
+	for id := range parentIDs {
+		ids = append(ids, id)
+	}
+
+	parents, err := t.svc.GetChunksByIDs(ctx, ids)
+	if err != nil {
+		slog.Warn("knowledge_search: expand parent context failed", "error", err)
+		return results
+	}
+
+	// Build parent text lookup.
+	parentText := make(map[string]string, len(parents))
+	for _, p := range parents {
+		parentText[p.ID] = p.Text
+	}
+
+	// Prepend parent context to child results.
+	expanded := make([]fp.SearchResult, 0, len(results))
+	for _, r := range results {
+		if pt, ok := parentText[r.ParentID]; ok && pt != "" {
+			r.Text = "[Context from section]\n" + pt + "\n\n[Excerpt]\n" + r.Text
+		}
+		expanded = append(expanded, r)
+	}
+	return expanded
 }
 
 // FormatResults renders a list of search hits as an LLM-friendly context

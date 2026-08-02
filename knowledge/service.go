@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,12 +29,15 @@ type Searcher interface {
 //
 // Service is long-lived; create once at process startup and Close on shutdown.
 type Service struct {
-	pool       *pgxpool.Pool
-	embedder   fp.Embedder
-	vecStore   fp.VectorStore
-	chunkStore fp.ChunkStore
-	searcher   Searcher
-	rerankModel rerank.Reranker
+	pool         *pgxpool.Pool
+	embedder     fp.Embedder
+	vecStore     fp.VectorStore
+	chunkStore   fp.ChunkStore
+	searcher     Searcher
+	rerankModel  rerank.Reranker
+	keywordIndex *fp.SQLiteKeywordIndex
+	keywordStop  chan struct{}
+	keywordWG    sync.WaitGroup
 }
 
 // NewService creates a knowledge service using the given shared Postgres pool.
@@ -59,15 +67,50 @@ func NewService(ctx context.Context, pool *pgxpool.Pool, embedder fp.Embedder) (
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: create file store: %w", err)
 	}
-	searcher := fp.NewSearcher(vecStore, fileStore.ChunkStore(), embedder)
+	keywordIndexPath := os.Getenv("KAWAI_KNOWLEDGE_FTS_PATH")
+	if keywordIndexPath == "" {
+		keywordIndexPath = filepath.Join(".plano", "run", "knowledge-fts.db")
+	}
+	keywordIndex, err := fp.NewSQLiteKeywordIndex(keywordIndexPath)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge: create SQLite keyword index: %w", err)
+	}
+	if err := keywordIndex.RefreshFromPostgres(ctx, pool); err != nil {
+		_ = keywordIndex.Close()
+		return nil, fmt.Errorf("knowledge: initial SQLite keyword index refresh: %w", err)
+	}
+	searcher := fp.NewSearcherWithKeywordSearcher(vecStore, fileStore.ChunkStore(), embedder, keywordIndex)
 
-	return &Service{
-		pool:       pool,
-		embedder:   embedder,
-		vecStore:   vecStore,
-		chunkStore: fileStore.ChunkStore(),
-		searcher:   searcher,
-	}, nil
+	svc := &Service{
+		pool:         pool,
+		embedder:     embedder,
+		vecStore:     vecStore,
+		chunkStore:   fileStore.ChunkStore(),
+		searcher:     searcher,
+		keywordIndex: keywordIndex,
+		keywordStop:  make(chan struct{}),
+	}
+	svc.keywordWG.Add(1)
+	go svc.refreshKeywordIndex()
+	return svc, nil
+}
+
+func (s *Service) refreshKeywordIndex() {
+	defer s.keywordWG.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			if err := s.keywordIndex.RefreshFromPostgres(ctx, s.pool); err != nil {
+				slog.Warn("knowledge: refresh SQLite keyword index failed", "error", err)
+			}
+			cancel()
+		case <-s.keywordStop:
+			return
+		}
+	}
 }
 
 // NewServiceWithSearcher is a test hook that bypasses DB setup and injects a
@@ -102,8 +145,19 @@ func (s *Service) Rerank(ctx context.Context, query string, documents []string) 
 	return s.rerankModel.Rerank(ctx, query, documents)
 }
 
-// Close is a no-op. The shared pool lifecycle is managed by the caller.
+// Close stops the keyword-index refresher and closes its local SQLite file.
+// The shared Postgres pool lifecycle is managed by the caller.
 func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.keywordStop != nil {
+		close(s.keywordStop)
+		s.keywordWG.Wait()
+	}
+	if s.keywordIndex != nil {
+		return s.keywordIndex.Close()
+	}
 	return nil
 }
 
@@ -161,6 +215,14 @@ func (s *Service) UserFileIDs(ctx context.Context, userID, tenantID, projectID s
 // Searcher returns the underlying Searcher.
 func (s *Service) Searcher() Searcher {
 	return s.searcher
+}
+
+// GetChunksByIDs fetches chunks by their IDs, used for parent context expansion.
+func (s *Service) GetChunksByIDs(ctx context.Context, ids []string) ([]fp.Chunk, error) {
+	if s == nil || s.chunkStore == nil {
+		return nil, nil
+	}
+	return s.chunkStore.GetChunksByIDs(ctx, ids)
 }
 
 // Pool returns the underlying pgx pool, mainly for tests.
