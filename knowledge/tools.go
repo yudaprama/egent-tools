@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -155,11 +156,7 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 	span.SetAttributes(attribute.Int("results.count", len(results)))
 
 	if t.rerankModel != nil && len(results) > 0 {
-		documents := make([]string, len(results))
-		for i, r := range results {
-			documents[i] = r.Text
-		}
-		reranked, err := t.rerankResults(ctx, args.Query, documents)
+		reranked, err := t.rerankResults(ctx, args.Query, results)
 		if err != nil {
 			slog.Warn("knowledge_search: rerank failed, using original results", "error", err)
 		} else if len(reranked) > 0 {
@@ -178,7 +175,11 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 // rerankResults applies the rerank model to search results,
 // returning them sorted by relevance score descending, limited
 // to the original result count.
-func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, documents []string) ([]fp.SearchResult, error) {
+func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, results []fp.SearchResult) ([]fp.SearchResult, error) {
+	documents := make([]string, len(results))
+	for i, r := range results {
+		documents[i] = r.Text
+	}
 	rankResults, err := t.svc.Rerank(ctx, query, documents)
 	if err != nil {
 		return nil, err
@@ -186,17 +187,14 @@ func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, d
 	if len(rankResults) == 0 {
 		return nil, nil
 	}
-	results := make([]fp.SearchResult, 0, len(rankResults))
 	for _, rr := range rankResults {
-		if rr.Index >= 0 && rr.Index < len(documents) {
-			results = append(results, fp.SearchResult{
-				ID:         "",
-				Similarity: rr.RelevanceScore,
-				Text:       documents[rr.Index],
-				Index:      rr.Index,
-			})
+		if rr.Index >= 0 && rr.Index < len(results) {
+			results[rr.Index].Similarity = rr.RelevanceScore
 		}
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
 	return results, nil
 }
 
