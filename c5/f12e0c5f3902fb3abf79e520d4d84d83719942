@@ -1,0 +1,22 @@
+go.mod
+  s_42244598adb527::t_daa74b7b7c7ef4 9
+  s_42244598adb527::t_413628aa9901ba 51,62
+go.sum
+  s_42244598adb527::t_15bf6fc1db9124 79-80,115-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "c5f12e0c5f3902fb3abf79e520d4d84d83719942",
+  "prompts": {},
+  "sessions": {
+    "s_42244598adb527": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_03fa918f5ffeU0H5Vo3FbYjDtX",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
