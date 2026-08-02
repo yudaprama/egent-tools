@@ -76,8 +76,6 @@ github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHm
 github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7C0MuV77Wo=
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0/go.mod h1:1NbS8ALrpOvjt0rHPNLyCIeMtbizbir8U//inJ+zuB8=
-github.com/kawai-network/fileprocessor v0.5.2 h1:a74O2fcLxCx7kR1i/gxTL1SJAZH5tyBw6JBNH9Vv8Gg=
-github.com/kawai-network/fileprocessor v0.5.2/go.mod h1:9srOVQCHFFgD5SAONMtJBhcLQ0AIfq2WT+WG21elvWA=
 github.com/kawai-network/x v1.0.47 h1:rxqZaCqpV3l7C9x+aE/FKJCfexHJGGCR8cF2NRqBOcE=
 github.com/kawai-network/x v1.0.47/go.mod h1:bbBaImmORUuwFvzbjCToFvzPWH4ou/ZFHLjM29dfbWY=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=

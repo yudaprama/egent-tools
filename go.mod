@@ -12,8 +12,8 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 )
 
-// Use the local MuninnDB SDK fork so trusted-backend edge-auth changes
-// (context-carried X-User-Id header) compile from source during local runs.
+replace github.com/kawai-network/fileprocessor => ../fileprocessor
+
 replace github.com/scrypster/muninndb/sdk/go/muninn => ../muninndb/sdk/go/muninn
 
 replace github.com/yudaprama/tools => ../tools
