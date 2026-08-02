@@ -1,0 +1,45 @@
+rerank/provider.go
+  s_f517e3afd5360b::t_48dae11e18baed 3-4
+  s_f517e3afd5360b::t_980dcfee2447d4 11
+  s_f517e3afd5360b::t_3318f3ed3dfb07 1-2,5-10,12-28
+knowledge/service.go
+  s_f517e3afd5360b::t_b1c854555bcd47 32
+  s_f517e3afd5360b::t_a2e76dcfc21971 11
+  s_f517e3afd5360b::t_5333fda210df5c 82-104
+rerank/transport.go
+  s_f517e3afd5360b::t_3586e4845107a9 1-43
+knowledge/tools.go
+  s_f517e3afd5360b::t_bb2a121db87474 28-35,201
+  s_f517e3afd5360b::t_adf8ad72f18a2b 19
+  s_f517e3afd5360b::t_26defae1b9e426 44-45,51-52
+  s_f517e3afd5360b::t_3b9c1c81478b7c 156-169,178-200
+  s_f517e3afd5360b::t_25cad0f4c82c22 202
+knowledge/tools_test.go
+  s_f517e3afd5360b::t_3aec0eef22a134 51-54
+  s_f517e3afd5360b::t_fee8ca380a33e9 12
+  s_f517e3afd5360b::t_143c2c0babad41 83,97,131,166,180,193,229
+  s_f517e3afd5360b::t_dbe9a4822a4629 56,70,155
+rerank/reranker.go
+  s_f517e3afd5360b::t_986df49fdfdad5 76-79
+  s_f517e3afd5360b::t_a398bc3690496c 80
+  s_f517e3afd5360b::t_c057439805f23f 1-75,81-84,86-101
+  s_f517e3afd5360b::t_20da3cb502dc72 85
+rerank/nvidia_reranker.go
+  s_f517e3afd5360b::t_7f88ae5bed0fc5 1-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "40db86e167eafa098bde33086a756cc0bd9e5b10",
+  "prompts": {},
+  "sessions": {
+    "s_f517e3afd5360b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_03e4ce82effexpdVA9W0l5xJpk",
+        "model": "ling-3.0-flash-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
