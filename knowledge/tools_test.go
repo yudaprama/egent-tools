@@ -9,6 +9,7 @@ import (
 	fp "github.com/kawai-network/fileprocessor"
 
 	"github.com/yudaprama/egent-tools/memory"
+	"github.com/yudaprama/egent-tools/rerank"
 )
 
 // fakeSearcher is a stand-in for fileprocessor.Searcher used to verify the
@@ -47,8 +48,12 @@ func (f *fakeService) UserFileIDs(_ context.Context, _, _, projectID string) ([]
 
 func (f *fakeService) Searcher() Searcher { return f.searcher }
 
+func (f *fakeService) Rerank(_ context.Context, _ string, _ []string) ([]rerank.RankResult, error) {
+	return nil, nil
+}
+
 func TestKnowledgeSearchTool_Info(t *testing.T) {
-	tl := NewKnowledgeSearchTool(nil)
+	tl := NewKnowledgeSearchTool(nil, nil)
 	info, err := tl.Info(context.Background())
 	if err != nil {
 		t.Fatalf("Info: %v", err)
@@ -62,7 +67,7 @@ func TestKnowledgeSearchTool_Info(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_NoService(t *testing.T) {
-	tl := NewKnowledgeSearchTool(nil)
+	tl := NewKnowledgeSearchTool(nil, nil)
 	out, err := tl.InvokableRun(context.Background(), `{"query":"x"}`)
 	if err != nil {
 		t.Fatalf("expected nil err when no service, got %v", err)
@@ -75,7 +80,7 @@ func TestKnowledgeSearchTool_NoService(t *testing.T) {
 func TestKnowledgeSearchTool_NoUserID(t *testing.T) {
 	srch := &fakeSearcher{}
 	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	_, err := tl.InvokableRun(context.Background(), `{"query":"hello"}`)
 	if err == nil {
 		t.Fatal("expected error when no user_id in context")
@@ -89,7 +94,7 @@ func TestKnowledgeSearchTool_NoFiles(t *testing.T) {
 	srch := &fakeSearcher{}
 	svc := &fakeService{searcher: srch, fileIDs: nil}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	out, err := tl.InvokableRun(ctx, `{"query":"hello"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -123,7 +128,7 @@ func TestKnowledgeSearchTool_SearchAndFormat(t *testing.T) {
 		fileIDs:  []string{"file-1", "file-2"},
 	}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	out, err := tl.InvokableRun(ctx, `{"query":"deadline","limit":5}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -147,7 +152,7 @@ func TestKnowledgeSearchTool_SearchAndFormat(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_EmptyQuery(t *testing.T) {
-	tl := NewKnowledgeSearchTool(nil)
+	tl := NewKnowledgeSearchTool(nil, nil)
 	_, err := tl.InvokableRun(context.Background(), `{"query":"  "}`)
 	if err == nil {
 		t.Fatal("expected error for empty query")
@@ -158,7 +163,7 @@ func TestKnowledgeSearchTool_SearchError(t *testing.T) {
 	srch := &fakeSearcher{err: errors.New("boom")}
 	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	_, err := tl.InvokableRun(ctx, `{"query":"x"}`)
 	if err == nil {
 		t.Fatal("expected error from searcher")
@@ -172,7 +177,7 @@ func TestKnowledgeSearchTool_LimitClampedToMax(t *testing.T) {
 	srch := &fakeSearcher{}
 	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	if _, err := tl.InvokableRun(ctx, `{"query":"x","limit":999}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +190,7 @@ func TestKnowledgeSearchTool_DefaultLimit(t *testing.T) {
 	srch := &fakeSearcher{results: []fp.SearchResult{{ID: "c1", Text: "x"}}}
 	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 	if _, err := tl.InvokableRun(ctx, `{"query":"x"}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +226,7 @@ func TestKnowledgeSearchTool_ProjectScoping(t *testing.T) {
 			"prj-a": {"project-a-1", "project-a-2"},
 		},
 	}
-	tl := NewKnowledgeSearchTool(svc)
+	tl := NewKnowledgeSearchTool(svc, nil)
 
 	ctxNoProject := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	if _, err := tl.InvokableRun(ctxNoProject, `{"query":"x"}`); err != nil {

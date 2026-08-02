@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	fp "github.com/kawai-network/fileprocessor"
+	"github.com/yudaprama/egent-tools/rerank"
 )
 
 // Searcher is the subset of fileprocessor.Searcher that the knowledge tool
@@ -28,6 +29,7 @@ type Service struct {
 	vecStore   fp.VectorStore
 	chunkStore fp.ChunkStore
 	searcher   Searcher
+	rerankModel rerank.Reranker
 }
 
 // NewService creates a knowledge service using the given shared Postgres pool.
@@ -75,6 +77,29 @@ func NewServiceWithSearcher(pool *pgxpool.Pool, searcher Searcher) *Service {
 		pool:     pool,
 		searcher: searcher,
 	}
+}
+
+// NewServiceWithRerank creates a knowledge service with an optional rerank model.
+// The rerank model is used to rerank semantic search results for improved relevance.
+func NewServiceWithRerank(ctx context.Context, pool *pgxpool.Pool, embedder fp.Embedder, rerankModel rerank.Reranker) (*Service, error) {
+	svc, err := NewService(ctx, pool, embedder)
+	if err != nil {
+		return nil, err
+	}
+	if svc != nil {
+		svc.rerankModel = rerankModel
+	}
+	return svc, nil
+}
+
+// Rerank applies the rerank model to search results if configured.
+// Returns reranked results sorted by relevance score, or the original
+// results if no rerank model is configured or the rerank call fails.
+func (s *Service) Rerank(ctx context.Context, query string, documents []string) ([]rerank.RankResult, error) {
+	if s == nil || s.rerankModel == nil || len(documents) == 0 {
+		return nil, nil
+	}
+	return s.rerankModel.Rerank(ctx, query, documents)
 }
 
 // Close is a no-op. The shared pool lifecycle is managed by the caller.

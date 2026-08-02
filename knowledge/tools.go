@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yudaprama/egent-tools/memory"
+	"github.com/yudaprama/egent-tools/rerank"
 )
 
 // tracerName is the OpenTelemetry tracer name for this package. It resolves
@@ -23,6 +24,14 @@ import (
 // TracerProvider (registered once at startup) is shared without this module
 // depending on any tracing glue package.
 const tracerName = "egent-tools/knowledge"
+
+// KnowledgeBackend is the subset of *Service the tool needs. Declared as an
+// interface so tests can inject a fake without touching the pool.
+type KnowledgeBackend interface {
+	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
+	Searcher() Searcher
+	Rerank(ctx context.Context, query string, documents []string) ([]rerank.RankResult, error)
+}
 
 // KnowledgeSearchTool performs semantic search over the current user's
 // documents, knowledge bases, and ingested files. It is a thin wrapper over
@@ -32,21 +41,15 @@ const tracerName = "egent-tools/knowledge"
 // agent runtime must inject it per-request with memory.WithUserID so the
 // tool scopes per-user.
 type KnowledgeSearchTool struct {
-	svc KnowledgeBackend
-}
-
-// KnowledgeBackend is the subset of *Service the tool needs. Declared as an
-// interface so tests can inject a fake without touching the pool.
-type KnowledgeBackend interface {
-	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
-	Searcher() Searcher
+	svc         KnowledgeBackend
+	rerankModel rerank.Reranker
 }
 
 // NewKnowledgeSearchTool wraps a Service (or any KnowledgeBackend) as an
 // Eino tool. Pass nil to create a tool that always returns a "not
 // configured" message — useful when the vector DB is absent.
-func NewKnowledgeSearchTool(svc KnowledgeBackend) *KnowledgeSearchTool {
-	return &KnowledgeSearchTool{svc: svc}
+func NewKnowledgeSearchTool(svc KnowledgeBackend, rerankModel rerank.Reranker) *KnowledgeSearchTool {
+	return &KnowledgeSearchTool{svc: svc, rerankModel: rerankModel}
 }
 
 func (t *KnowledgeSearchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
@@ -150,12 +153,51 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		return "", fmt.Errorf("knowledge_search: search: %w", err)
 	}
 	span.SetAttributes(attribute.Int("results.count", len(results)))
+
+	if t.rerankModel != nil && len(results) > 0 {
+		documents := make([]string, len(results))
+		for i, r := range results {
+			documents[i] = r.Text
+		}
+		reranked, err := t.rerankResults(ctx, args.Query, documents)
+		if err != nil {
+			slog.Warn("knowledge_search: rerank failed, using original results", "error", err)
+		} else if len(reranked) > 0 {
+			results = reranked
+		}
+	}
+
 	span.SetStatus(codes.Ok, "")
 	if len(results) == 0 {
 		return fmt.Sprintf("No relevant documents found for query: %q", args.Query), nil
 	}
 
 	return FormatResults(results, args.Query), nil
+}
+
+// rerankResults applies the rerank model to search results,
+// returning them sorted by relevance score descending, limited
+// to the original result count.
+func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, documents []string) ([]fp.SearchResult, error) {
+	rankResults, err := t.svc.Rerank(ctx, query, documents)
+	if err != nil {
+		return nil, err
+	}
+	if len(rankResults) == 0 {
+		return nil, nil
+	}
+	results := make([]fp.SearchResult, 0, len(rankResults))
+	for _, rr := range rankResults {
+		if rr.Index >= 0 && rr.Index < len(documents) {
+			results = append(results, fp.SearchResult{
+				ID:         "",
+				Similarity: rr.RelevanceScore,
+				Text:       documents[rr.Index],
+				Index:      rr.Index,
+			})
+		}
+	}
+	return results, nil
 }
 
 // FormatResults renders a list of search hits as an LLM-friendly context
