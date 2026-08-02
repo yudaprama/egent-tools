@@ -24,10 +24,9 @@ type Store interface {
 	Delete(ctx context.Context, tenantID, userID, sessionID, key string) error
 	Search(ctx context.Context, tenantID, query string, limit int, opts ...SearchOption) ([]MemoryEntry, error)
 	List(ctx context.Context, tenantID string, opts ...SearchOption) ([]MemoryEntry, error)
-	// SaveTurn persists a raw conversation turn: question becomes the concept,
-	// answer becomes the content, tagged with [user:<userID>, session:<sessionID>].
-	// Unlike Set (key→concept), SaveTurn stores the verbatim Q&A pair so it can
-	// be recalled as conversation history rather than an extracted fact.
+	// SaveTurn is an optional low-level raw-turn writer. The production chat
+	// path stores messages in pREST and resends full history, so it does not
+	// call this method.
 	SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error
 }
 

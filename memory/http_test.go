@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,10 +12,22 @@ import (
 // mockExtractor returns canned facts for testing.
 type mockExtractor struct {
 	facts map[string]string
+	err   error
 }
 
 func (e *mockExtractor) Extract(_ context.Context, _ string) (map[string]string, error) {
-	return e.facts, nil
+	return e.facts, e.err
+}
+
+func TestExtractAndStoreReturnsExtractionError(t *testing.T) {
+	mgr := NewManager(NoopStore{}).WithExtractor(&mockExtractor{
+		err: errors.New("extractor unavailable"),
+	})
+
+	err := mgr.ExtractAndStore(context.Background(), "t1", "u1", "s1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "extractor unavailable") {
+		t.Fatalf("expected extraction error to be returned, got %v", err)
+	}
 }
 
 // batchRecordingStore embeds NoopStore (satisfying Store) and records

@@ -61,9 +61,11 @@ func (m *Manager) ProfilePrefix(ctx context.Context, id Identity, query string) 
 
 // ExtractAndStoreAsync extracts durable facts from a user message via the
 // configured extractor and stores them in a background goroutine so a response
-// is never blocked on memory persistence. Errors are logged only. It is a
-// no-op when the message is empty, the identity is incomplete, or the manager
-// is backed by a NoopStore (MUNINN_URL unset). The request context is detached
+// is never blocked on memory persistence. Errors are logged only. This is an
+// intentionally best-effort path: memory is not a durability requirement, so
+// it does not own a bounded queue or shutdown drain. It is a no-op when the
+// message is empty, the identity is incomplete, or the manager is backed by a
+// NoopStore (MUNINN_URL unset). The request context is detached
 // (context.WithoutCancel) so the write survives the request completing — values
 // are preserved, cancellation/deadline is not.
 func (m *Manager) ExtractAndStoreAsync(ctx context.Context, id Identity, text string) {

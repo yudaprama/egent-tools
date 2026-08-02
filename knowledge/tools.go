@@ -38,7 +38,7 @@ type KnowledgeSearchTool struct {
 // KnowledgeBackend is the subset of *Service the tool needs. Declared as an
 // interface so tests can inject a fake without touching the pool.
 type KnowledgeBackend interface {
-	UserFileIDs(ctx context.Context, userID, projectID string) ([]string, error)
+	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
 	Searcher() Searcher
 }
 
@@ -115,11 +115,17 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		return "", fmt.Errorf("knowledge_search: no user_id in context")
 	}
 	span.SetAttributes(attribute.String("user.id", userID))
+	tenantID := memory.TenantIDFromContext(ctx)
+	if tenantID == "" {
+		span.SetStatus(codes.Error, "no tenant_id")
+		return "", fmt.Errorf("knowledge_search: no tenant_id in context")
+	}
+	span.SetAttributes(attribute.String("tenant.id", tenantID))
 
 	projectID := memory.ProjectIDFromContext(ctx)
 	span.SetAttributes(attribute.String("project.id", projectID))
 
-	fileIDs, err := t.svc.UserFileIDs(ctx, userID, projectID)
+	fileIDs, err := t.svc.UserFileIDs(ctx, userID, tenantID, projectID)
 	if err != nil {
 		span.SetStatus(codes.Error, "list user files")
 		span.RecordError(err)

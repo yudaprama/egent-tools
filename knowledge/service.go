@@ -87,12 +87,15 @@ func (s *Service) Close() error {
 // read other users' chunks. When projectID is non-empty, the result is further
 // scoped to files linked to that project (public.files.project_id), so a
 // project's knowledge_search only surfaces that project's own attachments.
-func (s *Service) UserFileIDs(ctx context.Context, userID string, projectID string) ([]string, error) {
+func (s *Service) UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("knowledge: service not initialized")
 	}
 	if userID == "" {
 		return nil, errors.New("knowledge: userID is required")
+	}
+	if tenantID == "" {
+		return nil, errors.New("knowledge: tenantID is required")
 	}
 	var (
 		rows pgx.Rows
@@ -102,13 +105,14 @@ func (s *Service) UserFileIDs(ctx context.Context, userID string, projectID stri
 		rows, err = s.pool.Query(ctx,
 			`SELECT id FROM public.files
 			 WHERE project_id = $1
-			   AND (user_id = $2 OR EXISTS (
+			   AND tenant_id = $2
+			   AND (user_id = $3 OR EXISTS (
 			     SELECT 1 FROM project_members
-			      WHERE project_id = $1 AND user_id = $2
-			   ))`, projectID, userID)
+			      WHERE project_id = $1 AND user_id = $3
+			   ))`, projectID, tenantID, userID)
 	} else {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id FROM public.files WHERE user_id = $1`, userID)
+			`SELECT id FROM public.files WHERE user_id = $1 AND tenant_id = $2`, userID, tenantID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: list user files: %w", err)
