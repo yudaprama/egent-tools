@@ -1,0 +1,25 @@
+go.mod
+  s_0e26a093714cd0::t_31585e82d68a90 47,51,57,72,76-79
+knowledge/service.go
+  s_0e26a093714cd0::t_b74ba354c94f2c 32-37,85-89,91
+  s_0e26a093714cd0::t_08c925bc461150 7-11,38-40,70-82,84,90,92-113,148-149,151-160,224,226
+  s_0e26a093714cd0::t_65f6d4cbcb152f 220-223,225,227
+go.sum
+  s_0e26a093714cd0::t_dc0e96c13260a4 55-56,63-64,112-113,129-130,192-193,203-205,213-214,228-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "29a51547aa489b5d05757f053946b60110c10d1b",
+  "prompts": {},
+  "sessions": {
+    "s_0e26a093714cd0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fc216-368a-79e1-8a34-03a8c16424c6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
