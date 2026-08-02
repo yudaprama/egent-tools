@@ -50,7 +50,7 @@ type CognitiveStore interface {
 // baseURL is the MuninnDB HTTP endpoint (e.g. "http://localhost:8475").
 // token is the API key (empty string for no auth).
 func NewMuninnStore(baseURL, token string) *MuninnStore {
-	return NewMuninnStoreWithTrustHeader(baseURL, token, "X-Tenant-Id")
+	return NewMuninnStoreWithTrustHeader(baseURL, token, muninn.DefaultTrustEdgeHeader)
 }
 
 // NewMuninnStoreWithTrustHeader creates a MuninnDB-backed memory store where
@@ -121,7 +121,7 @@ func (s *MuninnStore) deleteIDCache(tenant, userID, sessionID, concept string) {
 // Tags include "user:<userID>", "session:<sessionID>", and the
 // key prefix (e.g. "user", "preferences").
 func (s *MuninnStore) Set(ctx context.Context, tenantID, userID, sessionID, key, value string) error {
-	tags := tagsForKey(key, userID, sessionID)
+	tags := muninn.TagsForKey(key, userID, sessionID)
 
 	id, err := s.client.Write(s.ctxWithVault(ctx, tenantID), tenantID, key, value, tags)
 	if err != nil {
@@ -132,13 +132,13 @@ func (s *MuninnStore) Set(ctx context.Context, tenantID, userID, sessionID, key,
 }
 
 // SaveTurn stores a raw conversation turn as a single engram. The question
-// becomes the concept (capped at maxConceptRunes for MuninnDB's 512-byte
-// Concept field), the answer becomes the content, and tags are exactly
-// [user:<userID>, session:<sessionID>] — the only scoping tags Recall/Search
-// filter on. Used by the egent handler to persist every Q&A pair so it can be
-// recalled as conversation history without the client resending prior turns.
+// becomes the concept (byte-capped via muninn.TruncateConcept to fit the
+// server's Concept field), the answer becomes the content, and tags are
+// exactly [user:<userID>, session:<sessionID>]. The production chat handler
+// does not call this method; the web client owns conversation persistence and
+// resends the full history.
 func (s *MuninnStore) SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error {
-	concept := truncateRunes(question, maxConceptRunes)
+	concept := muninn.TruncateConcept(question)
 	tags := []string{"user:" + userID, "session:" + sessionID}
 
 	id, err := s.client.Write(s.ctxWithVault(ctx, tenantID), tenantID, concept, answer, tags)
@@ -151,6 +151,22 @@ func (s *MuninnStore) SaveTurn(ctx context.Context, tenantID, userID, sessionID,
 
 // SetBatch stores multiple memories in a single MuninnDB batch call.
 func (s *MuninnStore) SetBatch(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string) error {
+	return s.writeBatchTags(ctx, tenantID, userID, sessionID, entries, nil)
+}
+
+// SetProfile stores session-independent profile facts (name, email, ...) each
+// tagged with "user:<userID>" and an explicit "profile" tag so RecallProfile
+// can select them without inferring profile-ness from key naming or an empty
+// session. Profile facts carry no session tag by design.
+func (s *MuninnStore) SetProfile(ctx context.Context, tenantID, userID string, facts map[string]string) error {
+	return s.writeBatchTags(ctx, tenantID, userID, "", facts, []string{muninn.ProfileTag})
+}
+
+// writeBatchTags persists entries as engrams in batched MuninnDB writes,
+// deriving per-key tags via muninn.TagsForKey and appending extraTags (e.g.
+// muninn.ProfileTag) to every engram. Server-returned IDs are cached so
+// subsequent Get/Delete can use direct Read/Forget.
+func (s *MuninnStore) writeBatchTags(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string, extraTags []string) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -158,11 +174,13 @@ func (s *MuninnStore) SetBatch(ctx context.Context, tenantID, userID, sessionID 
 	requests := make([]muninn.WriteRequest, 0, len(entries))
 	keys := make([]string, 0, len(entries))
 	for key, value := range entries {
+		tags := muninn.TagsForKey(key, userID, sessionID)
+		tags = append(tags, extraTags...)
 		requests = append(requests, muninn.WriteRequest{
 			Vault:      tenantID,
 			Concept:    key,
 			Content:    value,
-			Tags:       tagsForKey(key, userID, sessionID),
+			Tags:       tags,
 			Confidence: 0.9,
 			Stability:  0.5,
 		})
@@ -274,7 +292,7 @@ func (s *MuninnStore) Search(ctx context.Context, tenantID, query string, limit 
 
 	entries := make([]MemoryEntry, 0, len(resp.Activations))
 	for _, item := range resp.Activations {
-		uid, sid := extractUserSessionFromTags(item.Tags)
+		uid, sid := muninn.ExtractUserSession(item.Tags)
 		s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
 		entries = append(entries, MemoryEntry{
 			Key:       item.Concept,
@@ -306,11 +324,11 @@ func (s *MuninnStore) List(ctx context.Context, tenantID string, opts ...SearchO
 		}
 
 		for _, item := range resp.Engrams {
-			uid, sid := extractUserSessionFromTags(item.Tags)
+			uid, sid := muninn.ExtractUserSession(item.Tags)
 			if !passesUserSessionFilter(uid, sid, filter) {
 				continue
 			}
-			if len(filter.Tags) > 0 && !passesTagFilter(item.Tags, filter.Tags) {
+			if len(filter.Tags) > 0 && !muninn.HasAllTags(item.Tags, filter.Tags) {
 				continue
 			}
 			s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
@@ -350,7 +368,7 @@ func (s *MuninnStore) Activate(ctx context.Context, tenantID, userID, sessionID 
 
 	results := make([]ActivatedMemory, 0, len(resp.Activations))
 	for _, item := range resp.Activations {
-		uid, sid := extractUserSessionFromTags(item.Tags)
+		uid, sid := muninn.ExtractUserSession(item.Tags)
 		s.setIDCache(tenantID, uid, sid, item.Concept, item.ID)
 		why := ""
 		if item.Why != nil {
@@ -403,6 +421,7 @@ func (s *MuninnStore) Health(ctx context.Context) bool {
 // Ensure interface compliance.
 var _ Store = (*MuninnStore)(nil)
 var _ CognitiveStore = (*MuninnStore)(nil)
+var _ ProfileStore = (*MuninnStore)(nil)
 
 // --- helpers ---
 
@@ -438,49 +457,6 @@ func tagsAllFilterCombined(userID, sessionID string, extraTags []string) []munin
 	return []muninn.Filter{{Field: "tags_all", Op: "all", Value: tagsAll}}
 }
 
-// passesTagFilter checks whether the engram's tags include ALL of the
-// required tags. Used for client-side filtering on List (which does not
-// support server-side tag filters).
-func passesTagFilter(engramTags, requiredTags []string) bool {
-	set := make(map[string]struct{}, len(engramTags))
-	for _, t := range engramTags {
-		set[t] = struct{}{}
-	}
-	for _, req := range requiredTags {
-		if _, ok := set[req]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// tagsForKey builds the tag list for an engram write.
-func tagsForKey(key, userID, sessionID string) []string {
-	var tags []string
-	if userID != "" {
-		tags = append(tags, "user:"+userID)
-	}
-	if sessionID != "" {
-		tags = append(tags, "session:"+sessionID)
-	}
-	if idx := strings.IndexByte(key, '.'); idx > 0 {
-		tags = append(tags, key[:idx])
-	}
-	return tags
-}
-
-// extractUserSessionFromTags parses user: and session: tags from a tag slice.
-func extractUserSessionFromTags(tags []string) (userID, sessionID string) {
-	for _, t := range tags {
-		if strings.HasPrefix(t, "user:") {
-			userID = t[5:]
-		} else if strings.HasPrefix(t, "session:") {
-			sessionID = t[8:]
-		}
-	}
-	return
-}
-
 // passesUserSessionFilter checks whether the entry's tags match the filter.
 func passesUserSessionFilter(tagUserID, tagSessionID string, filter SearchFilter) bool {
 	if filter.UserID != "" && tagUserID != filter.UserID {
@@ -494,7 +470,7 @@ func passesUserSessionFilter(tagUserID, tagSessionID string, filter SearchFilter
 
 // engramToEntryFromActivation converts an ActivationItem to a MemoryEntry.
 func engramToEntryFromActivation(item muninn.ActivationItem) *MemoryEntry {
-	uid, sid := extractUserSessionFromTags(item.Tags)
+	uid, sid := muninn.ExtractUserSession(item.Tags)
 	return &MemoryEntry{
 		Key:       item.Concept,
 		Value:     item.Content,
@@ -506,7 +482,7 @@ func engramToEntryFromActivation(item muninn.ActivationItem) *MemoryEntry {
 // engramToEntryFromEngram converts a full Engram (from Read) to a
 // MemoryEntry, preserving real server-side timestamps.
 func engramToEntryFromEngram(engram *muninn.Engram) *MemoryEntry {
-	uid, sid := extractUserSessionFromTags(engram.Tags)
+	uid, sid := muninn.ExtractUserSession(engram.Tags)
 	return &MemoryEntry{
 		Key:       engram.Concept,
 		Value:     engram.Content,
@@ -523,24 +499,6 @@ func unixToTime(ts int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(ts, 0)
-}
-
-// maxConceptRunes caps a turn's concept (the user's question). MuninnDB's
-// Engram.Concept field holds up to 512 bytes; rune-counting keeps multi-byte
-// (CJK/emoji) questions safely under that limit.
-const maxConceptRunes = 400
-
-// truncateRunes returns s truncated to at most n runes, with an ellipsis when
-// it was shortened.
-func truncateRunes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 // IsErrNotFound checks whether err wraps ErrMemoryNotFound.

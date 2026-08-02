@@ -15,14 +15,14 @@ import (
 )
 
 type muninnFixture struct {
-	server         *httptest.Server
-	writes         []muninn.WriteRequest
-	batchWrites    []muninn.WriteRequest
-	reads          []string
-	forgets        []string
-	activates      []struct {
-		Vault   string
-		Req     muninn.ActivateRequest
+	server      *httptest.Server
+	writes      []muninn.WriteRequest
+	batchWrites []muninn.WriteRequest
+	reads       []string
+	forgets     []string
+	activates   []struct {
+		Vault string
+		Req   muninn.ActivateRequest
 	}
 	listRequests   []url.Values
 	healthRequests int
@@ -67,20 +67,29 @@ func newMuninnFixture(t *testing.T) *muninnFixture {
 			})
 		case http.MethodGet:
 			fixture.listRequests = append(fixture.listRequests, r.URL.Query())
+			engs := make([]muninn.EngramItem, 0, len(fixture.writes)+len(fixture.batchWrites))
+			for _, wr := range fixture.writes {
+				engs = append(engs, writeReqToEngramItem(wr, r.URL.Query().Get("vault")))
+			}
+			for _, wr := range fixture.batchWrites {
+				engs = append(engs, writeReqToEngramItem(wr, r.URL.Query().Get("vault")))
+			}
+			if len(engs) == 0 {
+				// Legacy default for tests that exercise List without prior writes.
+				engs = []muninn.EngramItem{{
+					ID:        "id-user-name",
+					Concept:   "user.name",
+					Content:   "Alice",
+					Tags:      []string{"user:u1", "session:s1"},
+					Vault:     r.URL.Query().Get("vault"),
+					CreatedAt: 1700000001,
+				}}
+			}
 			writeJSON(t, w, muninn.ListEngramsResponse{
-				Engrams: []muninn.EngramItem{
-					{
-						ID:        "id-user-name",
-						Concept:   "user.name",
-						Content:   "Alice",
-						Tags:      []string{"user:u1", "session:s1"},
-						Vault:     r.URL.Query().Get("vault"),
-						CreatedAt: 1700000001,
-					},
-				},
-				Total:  1,
-				Limit:  100,
-				Offset: 0,
+				Engrams: engs,
+				Total:   len(engs),
+				Limit:   100,
+				Offset:  0,
 			})
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -112,8 +121,8 @@ func newMuninnFixture(t *testing.T) *muninnFixture {
 		var req muninn.ActivateRequest
 		readJSON(t, r, &req)
 		fixture.activates = append(fixture.activates, struct {
-			Vault   string
-			Req     muninn.ActivateRequest
+			Vault string
+			Req   muninn.ActivateRequest
 		}{Vault: r.URL.Query().Get("vault"), Req: req})
 		why := "exact concept match"
 		writeJSON(t, w, muninn.ActivateResponse{
@@ -360,6 +369,95 @@ func TestManager_IngestProfileEmptyNoop(t *testing.T) {
 	}
 }
 
+func TestManager_IngestProfileAddsProfileTag(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	defer fixture.server.Close()
+
+	store := NewMuninnStore(fixture.server.URL, "")
+	mgr := NewManager(store)
+	if err := mgr.IngestProfile(context.Background(), "t1", "u1", map[string]string{
+		"user.email": "bob@example.com",
+	}); err != nil {
+		t.Fatalf("IngestProfile: %v", err)
+	}
+	if len(fixture.batchWrites) != 1 {
+		t.Fatalf("expected one batch write, got %d", len(fixture.batchWrites))
+	}
+	if !muninn.HasAllTags(fixture.batchWrites[0].Tags, []string{muninn.ProfileTag}) {
+		t.Fatalf("expected profile tag, got %v", fixture.batchWrites[0].Tags)
+	}
+}
+
+func TestManager_IngestProfileRecallProfileRoundTrip(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+	mgr := NewManager(store)
+	ctx := context.Background()
+
+	facts := map[string]string{
+		"user.email": "bob@example.com",
+		"user.name":  "Bob",
+	}
+	if err := mgr.IngestProfile(ctx, "t1", "u1", facts); err != nil {
+		t.Fatalf("IngestProfile: %v", err)
+	}
+
+	// Every written engram must carry the explicit profile tag (not inferred
+	// from an empty session) plus the user tag, so RecallProfile can select it.
+	if len(fixture.batchWrites) != 2 {
+		t.Fatalf("expected 2 batch writes, got %d", len(fixture.batchWrites))
+	}
+	for _, w := range fixture.batchWrites {
+		if !muninn.HasAllTags(w.Tags, []string{muninn.ProfileTag, "user:u1"}) {
+			t.Fatalf("expected profile+user:u1 tags on %s, got %v", w.Concept, w.Tags)
+		}
+	}
+
+	// RecallProfile must surface the ingested facts end-to-end.
+	recalled := mgr.RecallProfile(ctx, "t1", "u1")
+	if recalled == "" {
+		t.Fatal(`RecallProfile: expected non-empty profile memory, got ""`)
+	}
+	for k, v := range facts {
+		if !strings.Contains(recalled, k) || !strings.Contains(recalled, v) {
+			t.Errorf("RecallProfile: expected %s=%s in recall, got %q", k, v, recalled)
+		}
+	}
+
+	// ProfilePrefix prepends the profile block ahead of the query.
+	out := mgr.ProfilePrefix(ctx, Identity{TenantID: "t1", UserID: "u1"}, "hello")
+	if !strings.Contains(out, "hello") {
+		t.Errorf("ProfilePrefix: expected query preserved, got %q", out)
+	}
+	if !strings.Contains(out, "bob@example.com") {
+		t.Errorf("ProfilePrefix: expected profile data prepended, got %q", out)
+	}
+}
+
+// TestManager_ExtractAndStoreDoesNotLeakProfileTag guards the earlier
+// over-broad heuristic: facts written via ExtractAndStore (including when the
+// session is empty) must NOT receive a "profile" tag, so they cannot leak
+// into RecallProfile.
+func TestManager_ExtractAndStoreDoesNotLeakProfileTag(t *testing.T) {
+	fixture := newMuninnFixture(t)
+	store := NewMuninnStore(fixture.server.URL, "")
+	mgr := NewManager(store).WithExtractor(&mockExtractor{
+		facts: map[string]string{"user.hobby": "cycling"},
+	})
+
+	if err := mgr.ExtractAndStore(context.Background(), "t1", "u1", "", "I cycle"); err != nil {
+		t.Fatalf("ExtractAndStore: %v", err)
+	}
+	if len(fixture.batchWrites) != 1 {
+		t.Fatalf("expected 1 batch write, got %d", len(fixture.batchWrites))
+	}
+	for _, tag := range fixture.batchWrites[0].Tags {
+		if tag == muninn.ProfileTag {
+			t.Fatalf("ExtractAndStore fact must not carry profile tag, got %v", fixture.batchWrites[0].Tags)
+		}
+	}
+}
+
 func TestMuninnStore_ActivateFormatsScores(t *testing.T) {
 	fixture := newMuninnFixture(t)
 	store := NewMuninnStore(fixture.server.URL, "")
@@ -398,5 +496,18 @@ func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		t.Fatalf("encode response: %v", err)
+	}
+}
+
+// writeReqToEngramItem mirrors a recorded write back as a listable engram so
+// tests can round-trip writes through List/Recall without a real DB.
+func writeReqToEngramItem(w muninn.WriteRequest, vault string) muninn.EngramItem {
+	return muninn.EngramItem{
+		ID:        "id-" + strings.ReplaceAll(w.Concept, ".", "-"),
+		Concept:   w.Concept,
+		Content:   w.Content,
+		Tags:      w.Tags,
+		Vault:     vault,
+		CreatedAt: 1700000001,
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/scrypster/muninndb/sdk/go/muninn"
 )
 
 // Manager coordinates memory extraction, persistence, and retrieval
@@ -28,6 +29,7 @@ type Manager struct {
 	store     Store
 	cognitive CognitiveStore
 	batch     BatchStore
+	profile   ProfileStore
 	extractor Extractor
 	mu        sync.RWMutex
 	OnExtract func(tenantID, userID string, factCount int)
@@ -40,6 +42,15 @@ type BatchStore interface {
 	SetBatch(ctx context.Context, tenantID, userID, sessionID string, entries map[string]string) error
 }
 
+// ProfileStore is an optional interface that Store implementations may
+// satisfy when they can persist session-independent profile facts (name,
+// email, ...) under a distinct "profile" tag. The Manager uses it from
+// IngestProfile so profile recall does not depend on inferring profile-ness
+// from key naming or an empty session.
+type ProfileStore interface {
+	SetProfile(ctx context.Context, tenantID, userID string, facts map[string]string) error
+}
+
 // NewManager creates a memory manager backed by the given store.
 func NewManager(store Store) *Manager {
 	mgr := &Manager{
@@ -50,6 +61,9 @@ func NewManager(store Store) *Manager {
 	}
 	if batch, ok := store.(BatchStore); ok {
 		mgr.batch = batch
+	}
+	if profile, ok := store.(ProfileStore); ok {
+		mgr.profile = profile
 	}
 	return mgr
 }
@@ -91,13 +105,12 @@ func (m *Manager) Recall(ctx context.Context, tenantID, userID, sessionID, query
 	return FormatMemories(entries)
 }
 
-// SaveTurn persists a raw Q&A conversation turn scoped to the given
-// tenant/user/session: the question becomes the concept, the answer becomes
-// the content, tagged with [user:<userID>, session:<sessionID>]. Unlike
-// ExtractAndStore (which runs an LLM/heuristic extractor over the text), this
-// stores the verbatim exchange so it can be recalled as conversation history.
-// Best-effort: callers should run it asynchronously and never block a
-// response on it.
+// SaveTurn is an optional low-level API for persisting a raw Q&A turn scoped to
+// the given tenant/user/session. The question becomes the concept and the
+// answer becomes the content, tagged with [user:<userID>, session:<sessionID>].
+// The production chat path does not call SaveTurn: the web client persists
+// messages in pREST and resends the full history on each request. Keep this
+// method for explicit callers that choose durable MuninnDB turn storage.
 func (m *Manager) SaveTurn(ctx context.Context, tenantID, userID, sessionID, question, answer string) error {
 	return m.store.SaveTurn(ctx, tenantID, userID, sessionID, question, answer)
 }
@@ -124,22 +137,21 @@ func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, session
 	}
 	facts, err := m.extractor.Extract(ctx, text)
 	if err != nil {
-		slog.Warn("memory extraction failed", "error", err)
-		return nil
+		return fmt.Errorf("memory extraction: %w", err)
 	}
 	if len(facts) == 0 {
 		return nil
 	}
 	stored := len(facts)
+	var storeErrs []error
 	if m.batch != nil {
 		if err := m.batch.SetBatch(ctx, tenantID, userID, sessionID, facts); err != nil {
-			slog.Warn("memory batch store failed", "error", err)
-			stored = 0
+			return fmt.Errorf("memory batch store: %w", err)
 		}
 	} else {
 		for key, value := range facts {
 			if err := m.store.Set(ctx, tenantID, userID, sessionID, key, value); err != nil {
-				slog.Warn("memory store failed", "key", key, "error", err)
+				storeErrs = append(storeErrs, fmt.Errorf("key %q: %w", key, err))
 				stored--
 				continue
 			}
@@ -147,6 +159,9 @@ func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, session
 	}
 	if m.OnExtract != nil && stored > 0 {
 		m.OnExtract(tenantID, userID, stored)
+	}
+	if len(storeErrs) > 0 {
+		return fmt.Errorf("memory store: %w", errors.Join(storeErrs...))
 	}
 	return nil
 }
@@ -157,15 +172,23 @@ func (m *Manager) ExtractAndStore(ctx context.Context, tenantID, userID, session
 // extraction step — intended for registration-time data that is already
 // known.
 //
-// Tags are set automatically: "user:<userID>" and the key prefix
-// (e.g. "user" for "user.email"). The caller should pass an empty sessionID
-// since profile facts are session-independent.
+// When the backing Store implements ProfileStore, facts are written with an
+// explicit "profile" tag (plus "user:<userID>") so RecallProfile can select
+// them. Otherwise it falls back to SetBatch/Set with no profile tag, in which
+// case the facts are stored but not profile-selectable. Profile facts are
+// session-independent and carry no session tag.
 func (m *Manager) IngestProfile(ctx context.Context, tenantID, userID string, facts map[string]string) error {
 	if len(facts) == 0 {
 		return nil
 	}
 	stored := 0
-	if m.batch != nil {
+	if m.profile != nil {
+		if err := m.profile.SetProfile(ctx, tenantID, userID, facts); err != nil {
+			slog.Warn("memory profile store failed", "error", err)
+		} else {
+			stored = len(facts)
+		}
+	} else if m.batch != nil {
 		if err := m.batch.SetBatch(ctx, tenantID, userID, "", facts); err != nil {
 			slog.Warn("memory profile batch store failed", "error", err)
 		} else {
@@ -208,9 +231,11 @@ func (m *Manager) PurgeOlderThan(ctx context.Context, tenantID string, age time.
 // NewManagerFromEnv builds a memory.Manager from the MUNINN_URL env var. When
 // MUNINN_URL is unset, returns a Manager backed by NoopStore (every recall/save
 // is a no-op) so an egent boots in dev/CI without MuninnDB. When set, it
-// constructs a MuninnStore using edge-auth via MUNINN_TRUST_EDGE_HEADER
-// (default "X-Tenant-Id") and fatals if the server is unreachable. The
-// returned cleanup func is always non-nil and safe to defer.
+// constructs a MuninnStore that authorizes via the edge-auth trust header
+// (MUNINN_TRUST_EDGE_HEADER, default "X-Tenant-Id") with NO bearer token —
+// MuninnDB must run in edge-auth mode for recall/save to be authorized. Fatals
+// if the server is unreachable. The returned cleanup func is always non-nil
+// and safe to defer.
 //
 // The extractor uses an LLM-backed extractor (OpenAI-compatible via
 // PLANO_LLM_GATEWAY) with MODEL_NAME as the extraction model. Fatal if
@@ -221,11 +246,8 @@ func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
 		slog.Warn("memory: MUNINN_URL unset — using NoopStore (recall/save are no-ops)")
 		return NewManager(NoopStore{}), func() {}
 	}
-	trustHeader := os.Getenv("MUNINN_TRUST_EDGE_HEADER")
-	if trustHeader == "" {
-		trustHeader = "X-Tenant-Id"
-	}
-	s := NewMuninnStoreWithTrustHeader(muninnURL, os.Getenv("MUNINN_TOKEN"), trustHeader)
+	trustHeader := muninn.TrustEdgeHeaderFromEnv()
+	s := NewMuninnStoreWithTrustHeader(muninnURL, "", trustHeader)
 	if !s.Health(ctx) {
 		slog.Error("memory: MuninnDB configured but unreachable at startup", "url", muninnURL)
 		os.Exit(1)
@@ -267,7 +289,7 @@ func NewManagerFromEnv(ctx context.Context) (*Manager, func()) {
 // for the given user and returns them as a context block. Returns empty
 // string when no profile data exists or the store is unavailable.
 func (m *Manager) RecallProfile(ctx context.Context, tenantID, userID string) string {
-	entries, err := m.store.List(ctx, tenantID, ByUserID(userID), ByTag("profile"))
+	entries, err := m.store.List(ctx, tenantID, ByUserID(userID), ByTag(muninn.ProfileTag))
 	if err != nil {
 		slog.Warn("memory profile recall failed", "error", err)
 		return ""
