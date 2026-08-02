@@ -6,7 +6,7 @@ require (
 	github.com/cloudwego/eino v0.9.12
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/kawai-network/fileprocessor v0.4.1
+	github.com/kawai-network/fileprocessor v0.5.2
 	github.com/scrypster/muninndb/sdk/go/muninn v0.0.0-20260612122835-b9c61193ca19
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
@@ -32,7 +32,6 @@ require (
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
 	github.com/ethereum/go-ethereum v1.17.0 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
-	github.com/getkawai/tools v0.1.6 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -49,7 +48,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/nikolalohinski/gonja v1.5.3 // indirect
-	github.com/pelletier/go-toml/v2 v2.0.9 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pgvector/pgvector-go v0.4.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -60,6 +59,7 @@ require (
 	github.com/unidoc/unitype v0.2.0 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
+	github.com/yudaprama/tools v0.2.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	golang.org/x/arch v0.11.0 // indirect
