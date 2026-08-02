@@ -1,0 +1,40 @@
+go.mod
+  s_8d8a0c4edc5d36::t_d16a20cbeccc52 7
+knowledge/tools_test.go
+  s_8d8a0c4edc5d36::t_928bff20202497 9,29,34,67,148-150,217,237-238,248
+  s_8d8a0c4edc5d36::t_de583fe1bdf5ec 48,68-91
+  s_8d8a0c4edc5d36::t_8256b55eb7d54c 15,17-24
+  s_8d8a0c4edc5d36::t_e7d09a3b7096a3 16
+  s_8d8a0c4edc5d36::t_1ad7338ceb69ab 25
+knowledge/service.go
+  s_8d8a0c4edc5d36::t_0d6a180c437659 13,23,142
+rerank/reranker.go
+  s_8d8a0c4edc5d36::t_2268f9edc9045e 64-69
+  s_8d8a0c4edc5d36::t_cdbe21b936fbb0 7-8,12,103
+knowledge/tools.go
+  s_8d8a0c4edc5d36::t_1403082037354d 10,182-183,187,191-192,194-198,204,212-214,239,241-243,253,257-258,263-265,267-268
+  s_8d8a0c4edc5d36::t_96be67e2282f19 180-181
+  s_8d8a0c4edc5d36::t_37f1941e9de3e6 34
+  s_8d8a0c4edc5d36::t_e42c3bfbaddca9 190
+rerank/nvidia_reranker.go
+  s_8d8a0c4edc5d36::t_cdbe21b936fbb0 14-15,78,80,88,119,121-126,128-133,159
+  s_8d8a0c4edc5d36::t_e7d09a3b7096a3 120
+go.sum
+  s_8d8a0c4edc5d36::t_8d556dbb9594f9 25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "ef6cab9ecc02e2a40fffa4df076a1549355a21cd",
+  "prompts": {},
+  "sessions": {
+    "s_8d8a0c4edc5d36": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fc277-c33a-7e42-b852-5c805422da9c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
