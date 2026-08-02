@@ -1,0 +1,31 @@
+knowledge/tools.go
+  s_10cdd549e06765::t_8436974ffe0c58 41,118-123,128
+memory/store.go
+  s_10cdd549e06765::t_6e88c71a3176f8 27-29
+knowledge/tools_test.go
+  s_10cdd549e06765::t_75e5e7a30bf262 187
+  s_10cdd549e06765::t_8436974ffe0c58 38,91,125,160,174,226
+memory/http_test.go
+  s_10cdd549e06765::t_56b7d335fe88c0 5-6,15,19-30
+memory/http.go
+  s_10cdd549e06765::t_193e143c054694 64-68
+knowledge/service.go
+  s_10cdd549e06765::t_75e5e7a30bf262 109,111
+  s_10cdd549e06765::t_8436974ffe0c58 90,97-99,108,112,115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "a2c68d8504fefed2debc955160275c9c6b0694ba",
+  "prompts": {},
+  "sessions": {
+    "s_10cdd549e06765": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fbe8b-519a-7842-a17f-64db127bab51",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
