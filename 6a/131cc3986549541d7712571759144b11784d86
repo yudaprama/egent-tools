@@ -1,0 +1,21 @@
+knowledge/tools.go
+  s_f517e3afd5360b::t_a036e933ac08f7 8
+  s_f517e3afd5360b::t_7d88e9e3b42986 159
+  s_f517e3afd5360b::t_eaca3ee3d48cd0 178-182,191-192,195-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "6a131cc3986549541d7712571759144b11784d86",
+  "prompts": {},
+  "sessions": {
+    "s_f517e3afd5360b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_03e4ce82effexpdVA9W0l5xJpk",
+        "model": "ling-3.0-flash-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
