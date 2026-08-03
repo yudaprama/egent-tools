@@ -38,7 +38,9 @@ type KnowledgeBackend interface {
 
 // KnowledgeSearchTool performs semantic search over the current user's
 // documents, knowledge bases, and ingested files. It is a thin wrapper over
-// fileprocessor.Searcher that adds per-user file scoping.
+// fileprocessor.Searcher that adds per-user file scoping. Retrieval results
+// flow through the pipeline as Eino schema.Documents until they are formatted
+// into the tool's string response.
 //
 // The user_id is read from context via memory.UserIDFromContext. The host
 // agent runtime must inject it per-request with memory.WithUserID so the

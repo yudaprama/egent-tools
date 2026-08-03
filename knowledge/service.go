@@ -136,9 +136,9 @@ func NewServiceWithRerank(ctx context.Context, pool *pgxpool.Pool, embedder fp.E
 	return svc, nil
 }
 
-// Rerank applies the rerank model to search results if configured.
-// Returns reranked results sorted by relevance score, or the original
-// results if no rerank model is configured or the rerank call fails.
+// Rerank applies the configured rerank model to Eino documents. Providers
+// preserve each document's ID and metadata and update its Score(). Context
+// placement is applied by KnowledgeSearchTool after this method returns.
 func (s *Service) Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error) {
 	if s == nil || s.rerankModel == nil || len(documents) == 0 {
 		return nil, nil
