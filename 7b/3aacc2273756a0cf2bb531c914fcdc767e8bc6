@@ -1,0 +1,21 @@
+knowledge/service.go
+  s_8d8a0c4edc5d36::t_e34460b3c971b8 139-141
+knowledge/tools.go
+  s_8d8a0c4edc5d36::t_e34460b3c971b8 41-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "7b3aacc2273756a0cf2bb531c914fcdc767e8bc6",
+  "prompts": {},
+  "sessions": {
+    "s_8d8a0c4edc5d36": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fc277-c33a-7e42-b852-5c805422da9c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
