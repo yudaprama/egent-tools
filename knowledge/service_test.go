@@ -3,6 +3,8 @@ package knowledge
 import (
 	"context"
 	"testing"
+
+	"github.com/cloudwego/eino/components/retriever"
 )
 
 func TestNewService_NilPool(t *testing.T) {
@@ -38,14 +40,14 @@ func TestService_CloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestNewServiceWithSearcher(t *testing.T) {
-	srch := &fakeSearcher{}
-	svc := NewServiceWithSearcher(nil, srch)
+func TestNewServiceWithRetriever(t *testing.T) {
+	ret := &fakeRetriever{}
+	svc := NewServiceWithRetriever(nil, ret)
 	if svc == nil {
 		t.Fatal("expected non-nil service")
 	}
-	if svc.Searcher() != srch {
-		t.Error("expected searcher to match")
+	if svc.Retriever() != retriever.Retriever(ret) {
+		t.Error("expected retriever to match")
 	}
 	if svc.Pool() != nil {
 		t.Error("expected nil pool")

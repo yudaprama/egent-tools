@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
 	fp "github.com/kawai-network/fileprocessor"
 
@@ -23,16 +24,27 @@ func newTestDocument(id, content string, score float64, fileID, fileName string)
 	return doc
 }
 
-// fakeSearcher is a stand-in for fileprocessor.Searcher used to verify the
+// fakeRetriever is a stand-in for eino retriever.Retriever used to verify the
 // tool wiring without a real Postgres + pgvector backend.
-type fakeSearcher struct {
-	results []*schema.Document
-	err     error
-	lastP   fp.SearchParamsSearcher
+type fakeRetriever struct {
+	results    []*schema.Document
+	err        error
+	lastQuery  string
+	lastFileIDs []string
+	lastLimit  int
 }
 
-func (f *fakeSearcher) SemanticSearch(_ context.Context, p fp.SearchParamsSearcher) ([]*schema.Document, error) {
-	f.lastP = p
+func (f *fakeRetriever) Retrieve(_ context.Context, query string, opts ...retriever.Option) ([]*schema.Document, error) {
+	f.lastQuery = query
+	// Decode options to capture what the tool passed.
+	co := retriever.GetCommonOptions(&retriever.Options{}, opts...)
+	if co != nil && co.TopK != nil {
+		f.lastLimit = *co.TopK
+	}
+	io := retriever.GetImplSpecificOptions(&fp.HybridOptions{}, opts...)
+	if io != nil {
+		f.lastFileIDs = io.FileIDs
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -41,7 +53,7 @@ func (f *fakeSearcher) SemanticSearch(_ context.Context, p fp.SearchParamsSearch
 
 // fakeService implements KnowledgeBackend without needing a real pool.
 type fakeService struct {
-	searcher       Searcher
+	ret            retriever.Retriever
 	fileIDs        []string
 	projectFileIDs map[string][]string
 	fileErr        error
@@ -58,11 +70,7 @@ func (f *fakeService) UserFileIDs(_ context.Context, _, _, projectID string) ([]
 	return f.fileIDs, nil
 }
 
-func (f *fakeService) Searcher() Searcher { return f.searcher }
-
-func (f *fakeService) GetChunksByIDs(_ context.Context, _ []string) ([]fp.Chunk, error) {
-	return nil, nil
-}
+func (f *fakeService) Retriever() retriever.Retriever { return f.ret }
 
 func (f *fakeService) Rerank(_ context.Context, _ string, _ []*schema.Document) ([]*schema.Document, error) {
 	return f.rerankResults, nil
@@ -117,8 +125,8 @@ func TestKnowledgeSearchTool_NoService(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_NoUserID(t *testing.T) {
-	srch := &fakeSearcher{}
-	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
+	ret := &fakeRetriever{}
+	svc := &fakeService{ret: ret, fileIDs: []string{"f1"}}
 	tl := NewKnowledgeSearchTool(svc, nil)
 	_, err := tl.InvokableRun(context.Background(), `{"query":"hello"}`)
 	if err == nil {
@@ -130,8 +138,8 @@ func TestKnowledgeSearchTool_NoUserID(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_NoFiles(t *testing.T) {
-	srch := &fakeSearcher{}
-	svc := &fakeService{searcher: srch, fileIDs: nil}
+	ret := &fakeRetriever{}
+	svc := &fakeService{ret: ret, fileIDs: nil}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
 	out, err := tl.InvokableRun(ctx, `{"query":"hello"}`)
@@ -144,15 +152,15 @@ func TestKnowledgeSearchTool_NoFiles(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_SearchAndFormat(t *testing.T) {
-	srch := &fakeSearcher{
+	ret := &fakeRetriever{
 		results: []*schema.Document{
 			newTestDocument("chunk-1", "Project deadline is next Friday.", 0.91, "file-1", "plan.md"),
 			newTestDocument("chunk-2", "Deploy via `make run`.", 0.78, "file-2", "README.md"),
 		},
 	}
 	svc := &fakeService{
-		searcher: srch,
-		fileIDs:  []string{"file-1", "file-2"},
+		ret:     ret,
+		fileIDs: []string{"file-1", "file-2"},
 	}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
@@ -161,11 +169,11 @@ func TestKnowledgeSearchTool_SearchAndFormat(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(srch.lastP.FileIDs) != 2 {
-		t.Errorf("expected 2 fileIDs passed to searcher, got %d", len(srch.lastP.FileIDs))
+	if len(ret.lastFileIDs) != 2 {
+		t.Errorf("expected 2 fileIDs passed to retriever, got %d", len(ret.lastFileIDs))
 	}
-	if srch.lastP.Limit != 5 {
-		t.Errorf("expected limit 5, got %d", srch.lastP.Limit)
+	if ret.lastLimit != 5 {
+		t.Errorf("expected limit 5, got %d", ret.lastLimit)
 	}
 	if !strings.Contains(out, "plan.md") {
 		t.Errorf("expected output to contain 'plan.md', got %q", out)
@@ -187,13 +195,13 @@ func TestKnowledgeSearchTool_EmptyQuery(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_SearchError(t *testing.T) {
-	srch := &fakeSearcher{err: errors.New("boom")}
-	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
+	ret := &fakeRetriever{err: errors.New("boom")}
+	svc := &fakeService{ret: ret, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
 	_, err := tl.InvokableRun(ctx, `{"query":"x"}`)
 	if err == nil {
-		t.Fatal("expected error from searcher")
+		t.Fatal("expected error from retriever")
 	}
 	if !strings.Contains(err.Error(), "boom") {
 		t.Errorf("expected 'boom' in error, got %v", err)
@@ -201,28 +209,28 @@ func TestKnowledgeSearchTool_SearchError(t *testing.T) {
 }
 
 func TestKnowledgeSearchTool_LimitClampedToMax(t *testing.T) {
-	srch := &fakeSearcher{}
-	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
+	ret := &fakeRetriever{}
+	svc := &fakeService{ret: ret, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
 	if _, err := tl.InvokableRun(ctx, `{"query":"x","limit":999}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if srch.lastP.Limit != 50 {
-		t.Errorf("expected limit clamped to 50, got %d", srch.lastP.Limit)
+	if ret.lastLimit != 50 {
+		t.Errorf("expected limit clamped to 50, got %d", ret.lastLimit)
 	}
 }
 
 func TestKnowledgeSearchTool_DefaultLimit(t *testing.T) {
-	srch := &fakeSearcher{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
-	svc := &fakeService{searcher: srch, fileIDs: []string{"f1"}}
+	ret := &fakeRetriever{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
+	svc := &fakeService{ret: ret, fileIDs: []string{"f1"}}
 	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
 	tl := NewKnowledgeSearchTool(svc, nil)
 	if _, err := tl.InvokableRun(ctx, `{"query":"x"}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if srch.lastP.Limit != 10 {
-		t.Errorf("expected default limit 10, got %d", srch.lastP.Limit)
+	if ret.lastLimit != 10 {
+		t.Errorf("expected default limit 10, got %d", ret.lastLimit)
 	}
 }
 
@@ -245,10 +253,10 @@ func TestFormatResults_SourceLabelFallback(t *testing.T) {
 // TestKnowledgeSearchTool_ProjectScoping verifies that a project id carried in
 // context scopes retrieval to that project's files rather than the whole user.
 func TestKnowledgeSearchTool_ProjectScoping(t *testing.T) {
-	srch := &fakeSearcher{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
+	ret := &fakeRetriever{results: []*schema.Document{newTestDocument("c1", "x", 0, "", "")}}
 	svc := &fakeService{
-		searcher: srch,
-		fileIDs:  []string{"user-wide-1"},
+		ret:     ret,
+		fileIDs: []string{"user-wide-1"},
 		projectFileIDs: map[string][]string{
 			"prj-a": {"project-a-1", "project-a-2"},
 		},
@@ -259,15 +267,108 @@ func TestKnowledgeSearchTool_ProjectScoping(t *testing.T) {
 	if _, err := tl.InvokableRun(ctxNoProject, `{"query":"x"}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(srch.lastP.FileIDs) != 1 || srch.lastP.FileIDs[0] != "user-wide-1" {
-		t.Errorf("expected user-wide file scope, got %v", srch.lastP.FileIDs)
+	if len(ret.lastFileIDs) != 1 || ret.lastFileIDs[0] != "user-wide-1" {
+		t.Errorf("expected user-wide file scope, got %v", ret.lastFileIDs)
 	}
 
 	ctxProject := memory.WithProjectID(ctxNoProject, "prj-a")
 	if _, err := tl.InvokableRun(ctxProject, `{"query":"x"}`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(srch.lastP.FileIDs) != 2 || srch.lastP.FileIDs[0] != "project-a-1" {
-		t.Errorf("expected project-a file scope, got %v", srch.lastP.FileIDs)
+	if len(ret.lastFileIDs) != 2 || ret.lastFileIDs[0] != "project-a-1" {
+		t.Errorf("expected project-a file scope, got %v", ret.lastFileIDs)
+	}
+}
+
+func TestFilterByMinScore(t *testing.T) {
+	docs := []*schema.Document{
+		newTestDocument("high", "high", 0.9, "", ""),
+		newTestDocument("mid", "mid", 0.5, "", ""),
+		newTestDocument("low", "low", 0.1, "", ""),
+	}
+	got := filterByMinScore(docs, 0.3)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 docs after min_score=0.3, got %d", len(got))
+	}
+	if got[0].ID != "high" || got[1].ID != "mid" {
+		t.Fatalf("unexpected remaining docs: %v, %v", got[0].ID, got[1].ID)
+	}
+}
+
+func TestFilterByMinScore_NoThreshold(t *testing.T) {
+	docs := []*schema.Document{
+		newTestDocument("a", "a", 0.1, "", ""),
+		newTestDocument("b", "b", 0.9, "", ""),
+	}
+	got := filterByMinScore(docs, 0)
+	if len(got) != 2 {
+		t.Fatalf("expected all docs when threshold=0, got %d", len(got))
+	}
+}
+
+func TestDeduplicateByFile(t *testing.T) {
+	// These two chunks share >80% words (only differs in one word).
+	docs := []*schema.Document{
+		newTestDocument("c1", "The project deadline is next Friday and the budget has been approved by the team", 0.9, "f1", "plan.md"),
+		newTestDocument("c2", "The project deadline is next Friday and the budget has been approved by management", 0.8, "f1", "plan.md"),
+		newTestDocument("c3", "Deploy via make run in the CI pipeline", 0.7, "f2", "README.md"),
+	}
+	got := deduplicateByFile(docs)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 docs after dedup (2 similar in f1 → 1), got %d", len(got))
+	}
+	// The higher-scored one should be kept.
+	found := false
+	for _, d := range got {
+		if d.ID == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected c1 (higher score) to be kept after dedup")
+	}
+}
+
+func TestDeduplicateByFile_DifferentFiles(t *testing.T) {
+	docs := []*schema.Document{
+		newTestDocument("c1", "The project deadline is next Friday", 0.9, "f1", "a.md"),
+		newTestDocument("c2", "The project deadline is next Friday", 0.8, "f2", "b.md"),
+	}
+	got := deduplicateByFile(docs)
+	if len(got) != 2 {
+		t.Fatalf("expected no dedup across different files, got %d", len(got))
+	}
+}
+
+func TestTokenizeWords(t *testing.T) {
+	words := tokenizeWords("Hello, World! This is a test.")
+	if _, ok := words["hello"]; !ok {
+		t.Error("expected 'hello' in token set")
+	}
+	if _, ok := words["world"]; !ok {
+		t.Error("expected 'world' in token set")
+	}
+	// "a" and "is" are too short (<=2 chars) and should be skipped.
+	if _, ok := words["a"]; ok {
+		t.Error("expected 'a' to be skipped (too short)")
+	}
+}
+
+func TestJaccard(t *testing.T) {
+	a := map[string]struct{}{"foo": {}, "bar": {}, "baz": {}}
+	b := map[string]struct{}{"foo": {}, "bar": {}, "qux": {}}
+	got := jaccard(a, b)
+	// intersection = {foo, bar} = 2, union = {foo, bar, baz, qux} = 4 → 0.5
+	if got != 0.5 {
+		t.Fatalf("expected jaccard=0.5, got %v", got)
+	}
+}
+
+func TestJaccard_Empty(t *testing.T) {
+	if jaccard(nil, nil) != 1.0 {
+		t.Fatal("expected 1.0 for two empty sets")
+	}
+	if jaccard(map[string]struct{}{"a": {}}, nil) != 0.0 {
+		t.Fatal("expected 0.0 for non-empty vs empty")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,24 +18,15 @@ import (
 	"github.com/yudaprama/egent-tools/rerank"
 )
 
-// Searcher is the subset of fileprocessor.Searcher that the knowledge tool
-// needs. Defined as an interface so tests can inject a fake.
-type Searcher interface {
-	SemanticSearch(ctx context.Context, p fp.SearchParamsSearcher) ([]*schema.Document, error)
-}
-
 // Service wires a pgvector-backed semantic search over the existing lobehub
 // schema (public.files, public.file_chunks, public.embeddings). It is scoped
 // per user by looking up the user's file IDs and passing them as a filter to
-// Searcher.SemanticSearch.
+// the eino Retriever.
 //
 // Service is long-lived; create once at process startup and Close on shutdown.
 type Service struct {
 	pool         *pgxpool.Pool
-	embedder     fp.Embedder
-	vecStore     fp.VectorStore
-	chunkStore   fp.ChunkStore
-	searcher     Searcher
+	retriever    retriever.Retriever
 	rerankModel  rerank.Reranker
 	keywordIndex *fp.SQLiteKeywordIndex
 	keywordStop  chan struct{}
@@ -80,14 +72,22 @@ func NewService(ctx context.Context, pool *pgxpool.Pool, embedder fp.Embedder) (
 		_ = keywordIndex.Close()
 		return nil, fmt.Errorf("knowledge: initial SQLite keyword index refresh: %w", err)
 	}
-	searcher := fp.NewSearcherWithKeywordSearcher(vecStore, fileStore.ChunkStore(), embedder, keywordIndex)
+
+	ret, err := fp.NewRetriever(ctx, &fp.RetrieverConfig{
+		Store:        vecStore,
+		Chunks:       fileStore.ChunkStore(),
+		Embedder:     embedder,
+		Keyword:      keywordIndex,
+		ExpandParent: true,
+	})
+	if err != nil {
+		_ = keywordIndex.Close()
+		return nil, fmt.Errorf("knowledge: create retriever: %w", err)
+	}
 
 	svc := &Service{
 		pool:         pool,
-		embedder:     embedder,
-		vecStore:     vecStore,
-		chunkStore:   fileStore.ChunkStore(),
-		searcher:     searcher,
+		retriever:    ret,
 		keywordIndex: keywordIndex,
 		keywordStop:  make(chan struct{}),
 	}
@@ -114,12 +114,12 @@ func (s *Service) refreshKeywordIndex() {
 	}
 }
 
-// NewServiceWithSearcher is a test hook that bypasses DB setup and injects a
-// custom Searcher. Pass nil for pool when the searcher does not need one.
-func NewServiceWithSearcher(pool *pgxpool.Pool, searcher Searcher) *Service {
+// NewServiceWithRetriever is a test hook that bypasses DB setup and injects a
+// custom Retriever. Pass nil for pool when the retriever does not need one.
+func NewServiceWithRetriever(pool *pgxpool.Pool, ret retriever.Retriever) *Service {
 	return &Service{
-		pool:     pool,
-		searcher: searcher,
+		pool:      pool,
+		retriever: ret,
 	}
 }
 
@@ -213,17 +213,9 @@ func (s *Service) UserFileIDs(ctx context.Context, userID, tenantID, projectID s
 	return ids, nil
 }
 
-// Searcher returns the underlying Searcher.
-func (s *Service) Searcher() Searcher {
-	return s.searcher
-}
-
-// GetChunksByIDs fetches chunks by their IDs, used for parent context expansion.
-func (s *Service) GetChunksByIDs(ctx context.Context, ids []string) ([]fp.Chunk, error) {
-	if s == nil || s.chunkStore == nil {
-		return nil, nil
-	}
-	return s.chunkStore.GetChunksByIDs(ctx, ids)
+// Retriever returns the eino Retriever for knowledge search.
+func (s *Service) Retriever() retriever.Retriever {
+	return s.retriever
 }
 
 // Pool returns the underlying pgx pool, mainly for tests.

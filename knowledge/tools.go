@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	scoretransformer "github.com/cloudwego/eino-ext/components/document/transformer/reranker/score"
+	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	fp "github.com/kawai-network/fileprocessor"
@@ -26,14 +28,14 @@ import (
 // depending on any tracing glue package.
 const tracerName = "egent-tools/knowledge"
 
+const defaultMinScore = 0.3
+
 // KnowledgeBackend is the subset of *Service the tool needs. Declared as an
 // interface so tests can inject a fake without touching the pool.
 type KnowledgeBackend interface {
 	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
-	Searcher() Searcher
+	Retriever() retriever.Retriever
 	Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error)
-	// GetChunksByIDs fetches parent chunks for context expansion.
-	GetChunksByIDs(ctx context.Context, ids []string) ([]fp.Chunk, error)
 }
 
 // KnowledgeSearchTool performs semantic search over the current user's
@@ -74,6 +76,11 @@ func (t *KnowledgeSearchTool) Info(_ context.Context) (*schema.ToolInfo, error) 
 				Type:     schema.Integer,
 				Required: false,
 			},
+			"min_score": {
+				Desc:     "Minimum relevance score (0-1). Chunks below this are filtered out. Defaults to 0.3.",
+				Type:     schema.Number,
+				Required: false,
+			},
 		}),
 	}, nil
 }
@@ -87,8 +94,9 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 	defer span.End()
 
 	var args struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query    string  `json:"query"`
+		Limit    int     `json:"limit"`
+		MinScore float64 `json:"min_score"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		span.SetStatus(codes.Error, "parse args")
@@ -111,7 +119,7 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		attribute.Int("limit", args.Limit),
 	)
 
-	if t.svc == nil || t.svc.Searcher() == nil {
+	if t.svc == nil || t.svc.Retriever() == nil {
 		span.SetAttributes(attribute.Bool("configured", false))
 		span.SetStatus(codes.Ok, "not configured")
 		return "knowledge search is not configured on this server", nil
@@ -146,11 +154,11 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		return "No documents found for this user. Upload files via the AList integration to populate the knowledge base.", nil
 	}
 
-	results, err := t.svc.Searcher().SemanticSearch(ctx, fp.SearchParamsSearcher{
-		Query:   args.Query,
-		FileIDs: fileIDs,
-		Limit:   args.Limit,
-	})
+	results, err := t.svc.Retriever().Retrieve(ctx, args.Query,
+		retriever.WithTopK(args.Limit),
+		fp.WithFileIDs(fileIDs...),
+		fp.WithExpandParent(true),
+	)
 	if err != nil {
 		span.SetStatus(codes.Error, "semantic search")
 		span.RecordError(err)
@@ -168,8 +176,17 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		}
 	}
 
-	// Expand results with parent context for richer retrieval.
-	results = t.expandParentContext(ctx, results)
+	minScore := args.MinScore
+	if minScore <= 0 {
+		minScore = defaultMinScore
+	}
+	results = filterByMinScore(results, minScore)
+	results = deduplicateByFile(results)
+
+	span.SetAttributes(
+		attribute.Float64("min_score", minScore),
+		attribute.Int("results.filtered_count", len(results)),
+	)
 
 	span.SetStatus(codes.Ok, "")
 	if len(results) == 0 {
@@ -200,55 +217,6 @@ func (t *KnowledgeSearchTool) rerankResults(ctx context.Context, query string, r
 	return placed, nil
 }
 
-// expandParentContext fetches parent chunks for results that have a ParentID,
-// prepending the parent text as context. This gives the LLM broader section
-// context even when only a child chunk matched.
-func (t *KnowledgeSearchTool) expandParentContext(ctx context.Context, results []*schema.Document) []*schema.Document {
-	if t.svc == nil || len(results) == 0 {
-		return results
-	}
-
-	// Collect unique parent IDs.
-	parentIDs := make(map[string]bool)
-	for _, r := range results {
-		parentID := fp.DocumentStringMetadata(r, fp.DocumentMetaParentID)
-		if parentID != "" {
-			parentIDs[parentID] = true
-		}
-	}
-	if len(parentIDs) == 0 {
-		return results
-	}
-
-	ids := make([]string, 0, len(parentIDs))
-	for id := range parentIDs {
-		ids = append(ids, id)
-	}
-
-	parents, err := t.svc.GetChunksByIDs(ctx, ids)
-	if err != nil {
-		slog.Warn("knowledge_search: expand parent context failed", "error", err)
-		return results
-	}
-
-	// Build parent text lookup.
-	parentText := make(map[string]string, len(parents))
-	for _, p := range parents {
-		parentText[p.ID] = p.Text
-	}
-
-	// Prepend parent context to child results.
-	expanded := make([]*schema.Document, 0, len(results))
-	for _, r := range results {
-		parentID := fp.DocumentStringMetadata(r, fp.DocumentMetaParentID)
-		if pt, ok := parentText[parentID]; ok && pt != "" {
-			r.Content = "[Context from section]\n" + pt + "\n\n[Excerpt]\n" + r.Content
-		}
-		expanded = append(expanded, r)
-	}
-	return expanded
-}
-
 // FormatResults renders a list of search hits as an LLM-friendly context
 // block. Source filename and similarity score are included so the model can
 // reason about provenance.
@@ -270,4 +238,126 @@ func sourceLabel(r *schema.Document) string {
 		return "file_id: " + fileID
 	}
 	return "chunk: " + r.ID
+}
+
+// filterByMinScore removes documents whose score is below the threshold.
+func filterByMinScore(docs []*schema.Document, minScore float64) []*schema.Document {
+	if minScore <= 0 || len(docs) == 0 {
+		return docs
+	}
+	out := make([]*schema.Document, 0, len(docs))
+	for _, d := range docs {
+		if d.Score() >= minScore {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// deduplicateByFile removes near-identical chunks from the same file.
+// Within each file, chunks whose word-level Jaccard similarity > 0.8 are
+// considered duplicates — only the highest-scored one is kept.
+func deduplicateByFile(docs []*schema.Document) []*schema.Document {
+	if len(docs) <= 1 {
+		return docs
+	}
+
+	type entry struct {
+		doc   *schema.Document
+		words map[string]struct{}
+	}
+
+	// Group by file.
+	byFile := make(map[string][]entry)
+	var order []string
+	for _, d := range docs {
+		fid := fp.DocumentStringMetadata(d, fp.DocumentMetaFileID)
+		if fid == "" {
+			fid = "__no_file__"
+		}
+		if _, exists := byFile[fid]; !exists {
+			order = append(order, fid)
+		}
+		byFile[fid] = append(byFile[fid], entry{doc: d, words: tokenizeWords(d.Content)})
+	}
+
+	out := make([]*schema.Document, 0, len(docs))
+	for _, fid := range order {
+		group := byFile[fid]
+		// Mark duplicates within this group.
+		kept := make([]bool, len(group))
+		for i := range kept {
+			kept[i] = true
+		}
+		for i := 0; i < len(group); i++ {
+			if !kept[i] {
+				continue
+			}
+			for j := i + 1; j < len(group); j++ {
+				if !kept[j] {
+					continue
+				}
+				if jaccard(group[i].words, group[j].words) > 0.8 {
+					// Keep the one with higher score.
+					if group[i].doc.Score() >= group[j].doc.Score() {
+						kept[j] = false
+					} else {
+						kept[i] = false
+						break
+					}
+				}
+			}
+		}
+		for i, k := range kept {
+			if k {
+				out = append(out, group[i].doc)
+			}
+		}
+	}
+	return out
+}
+
+// tokenizeWords splits text on non-letter boundaries and returns a set.
+func tokenizeWords(text string) map[string]struct{} {
+	words := make(map[string]struct{})
+	var buf strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			buf.WriteRune(unicode.ToLower(r))
+		} else if buf.Len() > 0 {
+			w := buf.String()
+			if len(w) > 2 { // skip trivial words
+				words[w] = struct{}{}
+			}
+			buf.Reset()
+		}
+	}
+	if buf.Len() > 0 {
+		w := buf.String()
+		if len(w) > 2 {
+			words[w] = struct{}{}
+		}
+	}
+	return words
+}
+
+// jaccard computes Jaccard similarity between two word sets.
+func jaccard(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 1.0
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return 0.0
+	}
+	inter := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0.0
+	}
+	return float64(inter) / float64(union)
 }
