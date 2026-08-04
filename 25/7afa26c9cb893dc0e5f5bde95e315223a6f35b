@@ -1,0 +1,55 @@
+knowledge/service_test.go
+  s_f813381c2c5e2d::t_b2b14559f376a9 6-7,43-45,49-50
+knowledge/tools.go
+  s_f813381c2c5e2d::t_314c9ed7b81884 37
+  s_f813381c2c5e2d::t_7c020fa50da087 157,159-161
+  s_19c540aa15e5e6::t_c7963a996ec28c 97-99
+  s_19c540aa15e5e6::t_a66fc19edbb092 79-83
+  s_19c540aa15e5e6::t_1129ad136a6569 9
+  s_f813381c2c5e2d::t_342ca95b319db3 12
+  s_f813381c2c5e2d::t_b5e4c2a41d1b10 158
+  s_19c540aa15e5e6::t_884032d7629409 31-32
+  s_19c540aa15e5e6::t_36f6951ce6149b 179-189
+  s_f813381c2c5e2d::t_a2d097156e47eb 122
+  s_19c540aa15e5e6::t_05f9eef13e7476 242-363
+knowledge/service.go
+  s_f813381c2c5e2d::t_0bc18692d6f766 24,29
+  s_f813381c2c5e2d::t_aaa233b7b5ee2f 76,81-86,90
+  s_f813381c2c5e2d::t_9822d4b3461332 77-80
+  s_f813381c2c5e2d::t_ad8bdd669d1579 117-119,121-122
+  s_f813381c2c5e2d::t_c7b9747fffe3ae 13
+  s_f813381c2c5e2d::t_878a5eb4d91d61 216-218
+  s_f813381c2c5e2d::t_6a150749106e17 75
+knowledge/tools_test.go
+  s_f813381c2c5e2d::t_240d7e7bc22c4d 9,27,29-34,37-40,42-47,56,73
+  s_f813381c2c5e2d::t_e250c51dab412d 41
+  s_f813381c2c5e2d::t_942ebb0f7a0878 198-199,204,212-213,219-220,225-226,232-233
+  s_f813381c2c5e2d::t_6e18805ac3ac23 256,258-259,270-271,278-279
+  s_19c540aa15e5e6::t_3ddbe1fe362147 310,312-313
+  s_f813381c2c5e2d::t_248430fbaa0348 128-129,141-142,155,162-163,172-173,175-176
+  s_19c540aa15e5e6::t_86a916dcdff0b6 280-309,311,314-372
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "257afa26c9cb893dc0e5f5bde95e315223a6f35b",
+  "prompts": {},
+  "sessions": {
+    "s_19c540aa15e5e6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_03df69cd3ffeGEBp3UJC0qSw4G",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    },
+    "s_f813381c2c5e2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_038e9de66ffelzOaCU87I3MVWp",
+        "model": "mimo-v2.5-free"
+      },
+      "human_author": "yudaprama <yudhaprama@icloud.com>"
+    }
+  }
+}
