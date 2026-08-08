@@ -25,7 +25,6 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 |---|---|
 | `docs/knowledge-base-architecture-review.md` | The authoritative architecture + a live correctness bug (B1), design risks, prioritized recommendations. **Read before changing retrieval.** |
 | `fileprocessor/AGENTS.md` | The `fileprocessor` library internals (stores, chunker, loader, pgvector, hybrid retriever). |
-| `docs/knowledge-base-comparison-weknora-vs-kawai.md` | Schema + pipeline comparison vs WeKnora (analytical, not how-to). |
 | `docs/knowledge-r6-measurement.md` | R6 recall@K measurement procedure — how to build the eval set, run the benchmark, and the decision rule. |
 | `API_MAP.md` | The ingest→embed→retrieve data flow across services. |
 
@@ -67,7 +66,7 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 ```
 egent startup
   egent-public-apis/sharedtools.go:34  buildSharedTools(ctx)
-    ├─ initSharedDBPool         ← KAWAI_PG_DSN (fallback KNOWLEDGE_PG_DSN)
+    ├─ initSharedDBPool         ← KNOWLEDGE_PG_DSN (fallback KAWAI_PG_DSN for backward compat)
     ├─ buildSharedEmbedder      ← OPENAI_EMBEDDINGS_URL / MODEL_BASE_URL, model text-embedding-3-small, 1024-dim
     │                              wrapped in billingEmbedder (usage.Record per call)
     ├─ buildSharedReranker      ← NVIDIA_API_KEYS  (nil if unset)
@@ -150,7 +149,8 @@ type ChunkStore interface { GetDocument, CreateChunk, GetChunksByIDs, GetFile, U
 
 | Var | Default | Effect |
 |---|---|---|
-| `KAWAI_PG_DSN` | — | kawai DB pool. Unset → no knowledge tools. (fallback: `KNOWLEDGE_PG_DSN`) |
+| `KNOWLEDGE_PG_DSN` | — | Read-only DSN (`kawai_kb_reader` role, NOBYPASSSRLS). Primary for knowledge tools. Falls back to `KAWAI_PG_DSN`. |
+| `KAWAI_PG_DSN` | — | Legacy kawai DSN (`postgres` role). Used as fallback when `KNOWLEDGE_PG_DSN` is unset. Write path uses this directly. |
 | `OPENAI_EMBEDDINGS_URL` | `MODEL_BASE_URL`+`/embeddings` | Embeddings endpoint. Unset → search skipped. Provider-agnostic: any OpenAI-compatible `/v1/embeddings` endpoint works. |
 | `OPENAI_EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embedding model. |
 | `OPENAI_API_KEY` / `MODEL_API_KEY` | — | Embeddings auth. |
@@ -222,7 +222,79 @@ fileprocessor integration tests need `FILEPROCESSOR_TEST_PG_DSN` + `-tags=integr
 | `public.files` | File records (`user_id`, `tenant_id`, `project_id`) — ACL source |
 | `public.chunks` | Chunk text + `fts_vector` (TSVECTOR, GIN-indexed, **used by PG-FTS keyword search**) |
 | `public.file_chunks` | chunk ↔ file link (hydrates `file_id` on results) |
-| `public.embeddings` | `vector(1024)` + HNSW `public_embeddings_hnsw_idx` (`vector_cosine_ops`). `chunk_id` UNIQUE, FK→`chunks.id` `ON DELETE CASCADE` |
+| `public.embeddings` | `vector(1024)` + HNSW `public_embeddings_hnsw_idx` (`vector_cosine_ops`). `chunk_id` UNIQUE, FK→`chunks.id` `ON DELETE CASCADE`. RLS: `tenant_isolation_embeddings` (matches `chunks`/`file_chunks`/`files` pattern). |
 
 Live schema = `db/migrations/*.sql`. Query the DB directly (`psql "\d <table>"`)
 — `db/lobehub-schema.sql` is a stale snapshot.
+
+## Deployment — `kawai_kb_reader` role (R3)
+
+Knowledge tools connect as `kawai_kb_reader` (NOBYPASSSRLS, SELECT-only).
+Write path (egent-jobs, pREST, fileprocessor) still uses `postgres` via `KAWAI_PG_DSN`.
+
+### Role
+
+| Attr | Value |
+|---|---|
+| `rolsuper` | f |
+| `rolcanlogin` | t |
+| `rolbypassrls` | f |
+
+### RLS policies (same pattern on all 5 tables)
+
+```
+USING (current_setting('app.tenant_id', true) IS NULL
+    OR tenant_id IS NULL
+    OR tenant_id = current_setting('app.tenant_id', true))
+```
+
+| Table | Policy name |
+|---|---|
+| `public.files` | `tenant_isolation_files` |
+| `public.chunks` | `tenant_isolation_chunks` |
+| `public.file_chunks` | `tenant_isolation_file_chunks` |
+| `public.embeddings` | `tenant_isolation_embeddings` |
+| `public.documents` | `tenant_isolation_documents` |
+
+### Env vars
+
+| Var | Used by | Fallback |
+|---|---|---|
+| `KNOWLEDGE_PG_DSN` | knowledge tools (this package) | `KAWAI_PG_DSN` |
+| `KAWAI_PG_DSN` | write path (egent-jobs, pREST, fileprocessor) | — |
+
+### Wiring (code path)
+
+```
+sharedtools.go:81  initSharedDBPool()
+  → os.Getenv("KNOWLEDGE_PG_DSN")        # primary
+  → os.Getenv("KAWAI_PG_DSN")            # fallback
+  → pgxpool.NewWithConfig()
+
+public_embeddings_store.go:199  withTenantGuard()
+  → pool.Begin()
+  → tx.Exec("SET LOCAL app.tenant_id = ...")   # pq.QuoteLiteral
+  → fn(tx)
+```
+
+### Verify
+
+```bash
+# 1. Connection test
+PASS="..." && PGPASSWORD="$PASS" psql -h HOST -p 5432 -U kawai_kb_reader -d postgres -c "SELECT 1"
+
+# 2. RLS enforced (should return 0)
+PGPASSWORD="$PASS" psql ... --single-transaction -c "
+  SET LOCAL app.tenant_id = '99999999-9999-9999-9999-999999999999';
+  SELECT count(*) FROM public.files;
+"
+
+# 3. RLS with correct tenant (should return >0)
+PGPASSWORD="$PASS" psql ... --single-transaction -c "
+  SET LOCAL app.tenant_id = '00000000-0000-0000-0000-000000000001';
+  SELECT count(*) FROM public.files;
+"
+
+# 4. No bypass (should fail with permission error)
+PGPASSWORD="$PASS" psql ... -c "INSERT INTO public.files DEFAULT VALUES;"
+```
