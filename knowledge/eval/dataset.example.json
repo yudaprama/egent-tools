@@ -1,0 +1,19 @@
+{
+  "_comment": "Starter eval set for R6 recall@K measurement. Extend to ~30 queries. 'relevant' = public.chunks.id values after the corpus is ingested. Span: short/long, keyword/natural-language, exact-id, multi-concept.",
+  "tenant_id": "REPLACE_WITH_TEST_TENANT",
+  "user_id": "REPLACE_WITH_TEST_USER",
+  "queries": [
+    { "query": "how do I deploy the application", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "deployment", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "ci/cd pipeline configuration", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "database connection pooling", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "authentication flows", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "kubernetes helm chart", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "rate limiting and quotas", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "what is the retry policy for failed jobs", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "configure environment variables", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "webhook signature verification", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "observability tracing metrics", "relevant": ["REPLACE_CHUNK_ID"] },
+    { "query": "storage limits per workspace", "relevant": ["REPLACE_CHUNK_ID"] }
+  ]
+}
