@@ -70,14 +70,31 @@ func waitForBatch(t *testing.T, s *batchRecordingStore, d time.Duration) []map[s
 	}
 }
 
-func TestExtractAndStoreAsync_WritesExtractedFacts(t *testing.T) {
+// newAsyncManager builds a batch-recording store and an async manager whose
+// extractor returns the given canned facts.
+func newAsyncManager(facts map[string]string) (*batchRecordingStore, *Manager) {
 	store := &batchRecordingStore{ch: make(chan struct{}, 1)}
-	mgr := NewManager(store).WithExtractor(&mockExtractor{
-		facts: map[string]string{
-			"user.name":        "Budi",
-			"user.location":    "Bandung",
-			"preferences.kopi": "kopi",
-		},
+	return store, NewManager(store).WithExtractor(&mockExtractor{facts: facts})
+}
+
+// assertNoBatchWrite verifies that async extraction produced no store writes.
+func assertNoBatchWrite(t *testing.T, store *batchRecordingStore, reason string) {
+	t.Helper()
+	select {
+	case <-store.ch:
+		t.Fatalf("expected no batch write: %s", reason)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := store.batches(); len(got) != 0 {
+		t.Fatalf("expected no writes: %s, got %v", reason, got)
+	}
+}
+
+func TestExtractAndStoreAsync_WritesExtractedFacts(t *testing.T) {
+	store, mgr := newAsyncManager(map[string]string{
+		"user.name":        "Budi",
+		"user.location":    "Bandung",
+		"preferences.kopi": "kopi",
 	})
 
 	memID := Identity{TenantID: "t1", UserID: "u1"}
@@ -100,57 +117,27 @@ func TestExtractAndStoreAsync_WritesExtractedFacts(t *testing.T) {
 }
 
 func TestExtractAndStoreAsync_NoopWhenEmptyText(t *testing.T) {
-	store := &batchRecordingStore{ch: make(chan struct{}, 1)}
-	mgr := NewManager(store).WithExtractor(&mockExtractor{
-		facts: map[string]string{"k": "v"},
-	})
+	store, mgr := newAsyncManager(map[string]string{"k": "v"})
 
 	mgr.ExtractAndStoreAsync(context.Background(), Identity{TenantID: "t1", UserID: "u1"}, "")
 
-	select {
-	case <-store.ch:
-		t.Fatalf("expected no batch write for empty text")
-	case <-time.After(100 * time.Millisecond):
-	}
-	if got := store.batches(); len(got) != 0 {
-		t.Fatalf("expected no writes, got %v", got)
-	}
+	assertNoBatchWrite(t, store, "empty text")
 }
 
 func TestExtractAndStoreAsync_NoopWhenIdentityIncomplete(t *testing.T) {
-	store := &batchRecordingStore{ch: make(chan struct{}, 1)}
-	mgr := NewManager(store).WithExtractor(&mockExtractor{
-		facts: map[string]string{"k": "v"},
-	})
+	store, mgr := newAsyncManager(map[string]string{"k": "v"})
 
 	mgr.ExtractAndStoreAsync(context.Background(), Identity{TenantID: "", UserID: "u1"}, "I like kopi")
 	mgr.ExtractAndStoreAsync(context.Background(), Identity{TenantID: "t1", UserID: ""}, "I like kopi")
 
-	select {
-	case <-store.ch:
-		t.Fatalf("expected no batch write for incomplete identity")
-	case <-time.After(100 * time.Millisecond):
-	}
-	if got := store.batches(); len(got) != 0 {
-		t.Fatalf("expected no writes, got %v", got)
-	}
+	assertNoBatchWrite(t, store, "incomplete identity")
 }
 
 func TestExtractAndStoreAsync_NoopWhenNoFactsExtracted(t *testing.T) {
-	store := &batchRecordingStore{ch: make(chan struct{}, 1)}
-	mgr := NewManager(store).WithExtractor(&mockExtractor{
-		facts: map[string]string{},
-	})
+	store, mgr := newAsyncManager(map[string]string{})
 
 	// Mock extractor returns nothing, so no store write should occur.
 	mgr.ExtractAndStoreAsync(context.Background(), Identity{TenantID: "t1", UserID: "u1"}, "What is the weather today?")
 
-	select {
-	case <-store.ch:
-		t.Fatalf("expected no batch write when no facts extracted")
-	case <-time.After(100 * time.Millisecond):
-	}
-	if got := store.batches(); len(got) != 0 {
-		t.Fatalf("expected no writes, got %v", got)
-	}
+	assertNoBatchWrite(t, store, "no facts extracted")
 }

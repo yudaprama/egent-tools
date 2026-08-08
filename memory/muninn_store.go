@@ -241,11 +241,7 @@ func (s *MuninnStore) Get(ctx context.Context, tenantID, userID, sessionID, key 
 // unknown. Returns ErrMemoryNotFound when neither path locates the engram.
 func (s *MuninnStore) Delete(ctx context.Context, tenantID, userID, sessionID, key string) error {
 	if id := s.lookupIDCache(tenantID, userID, sessionID, key); id != "" {
-		if err := s.client.Forget(s.ctxWithVault(ctx, tenantID), id, tenantID); err != nil {
-			return fmt.Errorf("muninn forget: %w", err)
-		}
-		s.deleteIDCache(tenantID, userID, sessionID, key)
-		return nil
+		return s.forgetAndDropCache(ctx, tenantID, userID, sessionID, id, key)
 	}
 
 	filters := tagsAllFilter(userID, sessionID)
@@ -255,14 +251,19 @@ func (s *MuninnStore) Delete(ctx context.Context, tenantID, userID, sessionID, k
 	}
 	for _, item := range resp.Activations {
 		if item.Concept == key {
-			if err := s.client.Forget(ctx, item.ID, tenantID); err != nil {
-				return fmt.Errorf("muninn forget: %w", err)
-			}
-			s.deleteIDCache(tenantID, userID, sessionID, key)
-			return nil
+			return s.forgetAndDropCache(ctx, tenantID, userID, sessionID, item.ID, key)
 		}
 	}
 	return ErrMemoryNotFound
+}
+
+// forgetAndDropCache forgets an engram by ID and removes it from the ID cache.
+func (s *MuninnStore) forgetAndDropCache(ctx context.Context, tenantID, userID, sessionID, id, key string) error {
+	if err := s.client.Forget(s.ctxWithVault(ctx, tenantID), id, tenantID); err != nil {
+		return fmt.Errorf("muninn forget: %w", err)
+	}
+	s.deleteIDCache(tenantID, userID, sessionID, key)
+	return nil
 }
 
 // Search uses MuninnDB's Activate for context-aware retrieval. When
@@ -427,17 +428,7 @@ var _ ProfileStore = (*MuninnStore)(nil)
 
 // tagsAllFilter builds tags_all filters when userID or sessionID is set.
 func tagsAllFilter(userID, sessionID string) []muninn.Filter {
-	var tagsAll []string
-	if userID != "" {
-		tagsAll = append(tagsAll, "user:"+userID)
-	}
-	if sessionID != "" {
-		tagsAll = append(tagsAll, "session:"+sessionID)
-	}
-	if len(tagsAll) == 0 {
-		return nil
-	}
-	return []muninn.Filter{{Field: "tags_all", Op: "all", Value: tagsAll}}
+	return tagsAllFilterCombined(userID, sessionID, nil)
 }
 
 // tagsAllFilterCombined builds a single tags_all filter merging user/session

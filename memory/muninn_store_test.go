@@ -145,9 +145,22 @@ func newMuninnFixture(t *testing.T) *muninnFixture {
 	return fixture
 }
 
-func TestMuninnStore_SetGetUsesCachedIDAndPreservesTimestamps(t *testing.T) {
+// newMuninnTestStore spins up the fixture server and a store pointing at it.
+func newMuninnTestStore(t *testing.T) (*muninnFixture, *MuninnStore) {
+	t.Helper()
 	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	return fixture, NewMuninnStore(fixture.server.URL, "")
+}
+
+// newMuninnTestManager spins up the fixture server and a manager backed by it.
+func newMuninnTestManager(t *testing.T) (*muninnFixture, *Manager) {
+	t.Helper()
+	fixture, store := newMuninnTestStore(t)
+	return fixture, NewManager(store)
+}
+
+func TestMuninnStore_SetGetUsesCachedIDAndPreservesTimestamps(t *testing.T) {
+	fixture, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	if err := store.Set(ctx, "t1", "u1", "s1", "user.name", "Alice"); err != nil {
@@ -175,8 +188,7 @@ func TestMuninnStore_SetGetUsesCachedIDAndPreservesTimestamps(t *testing.T) {
 }
 
 func TestMuninnStore_DeleteUsesCachedID(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	if err := store.Set(ctx, "t1", "u1", "s1", "user.name", "Alice"); err != nil {
@@ -191,8 +203,7 @@ func TestMuninnStore_DeleteUsesCachedID(t *testing.T) {
 }
 
 func TestMuninnStore_DeleteMissingReturnsErrMemoryNotFound(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	_, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	err := store.Delete(ctx, "t1", "u1", "s1", "missing.key")
@@ -202,8 +213,7 @@ func TestMuninnStore_DeleteMissingReturnsErrMemoryNotFound(t *testing.T) {
 }
 
 func TestMuninnStore_SetBatchCachesIDs(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	if err := store.SetBatch(ctx, "t1", "u1", "s1", map[string]string{"user.name": "Alice", "user.location": "Paris"}); err != nil {
@@ -221,8 +231,7 @@ func TestMuninnStore_SetBatchCachesIDs(t *testing.T) {
 }
 
 func TestMuninnStore_ListCachesIDsAndPreservesCreatedAt(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	_, store := newMuninnTestStore(t)
 
 	entries, err := store.List(context.Background(), "t1", ByUserID("u1"), BySessionID("s1"))
 	if err != nil {
@@ -240,8 +249,7 @@ func TestMuninnStore_ListCachesIDsAndPreservesCreatedAt(t *testing.T) {
 }
 
 func TestMuninnStore_SearchPassesTagFilters(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	results, err := store.Search(ctx, "t1", "name", 5, ByUserID("u1"), BySessionID("s1"))
@@ -264,8 +272,7 @@ func TestMuninnStore_SearchPassesTagFilters(t *testing.T) {
 }
 
 func TestMuninnStore_SearchByTagCombinesFilters(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	ctx := context.Background()
 
 	results, err := store.Search(ctx, "t1", "name", 5, ByUserID("u1"), ByTag("session:s1"))
@@ -296,8 +303,7 @@ func TestMuninnStore_SearchByTagCombinesFilters(t *testing.T) {
 }
 
 func TestMuninnStore_ListFiltersByTag(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	_, store := newMuninnTestStore(t)
 
 	// The fixture returns one engram with tags ["user:u1", "session:s1"].
 	// Searching with a matching tag should return the entry.
@@ -320,8 +326,7 @@ func TestMuninnStore_ListFiltersByTag(t *testing.T) {
 }
 
 func TestManager_IngestProfileWritesToStore(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	mgr := NewManager(store)
 
 	facts := map[string]string{
@@ -354,8 +359,7 @@ func TestManager_IngestProfileWritesToStore(t *testing.T) {
 }
 
 func TestManager_IngestProfileEmptyNoop(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	mgr := NewManager(store)
 
 	if err := mgr.IngestProfile(context.Background(), "t1", "u1", nil); err != nil {
@@ -370,10 +374,7 @@ func TestManager_IngestProfileEmptyNoop(t *testing.T) {
 }
 
 func TestManager_IngestProfileAddsProfileTag(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	defer fixture.server.Close()
-
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	mgr := NewManager(store)
 	if err := mgr.IngestProfile(context.Background(), "t1", "u1", map[string]string{
 		"user.email": "bob@example.com",
@@ -389,8 +390,7 @@ func TestManager_IngestProfileAddsProfileTag(t *testing.T) {
 }
 
 func TestManager_IngestProfileRecallProfileRoundTrip(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	mgr := NewManager(store)
 	ctx := context.Background()
 
@@ -439,8 +439,7 @@ func TestManager_IngestProfileRecallProfileRoundTrip(t *testing.T) {
 // session is empty) must NOT receive a "profile" tag, so they cannot leak
 // into RecallProfile.
 func TestManager_ExtractAndStoreDoesNotLeakProfileTag(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 	mgr := NewManager(store).WithExtractor(&mockExtractor{
 		facts: map[string]string{"user.hobby": "cycling"},
 	})
@@ -459,8 +458,7 @@ func TestManager_ExtractAndStoreDoesNotLeakProfileTag(t *testing.T) {
 }
 
 func TestMuninnStore_ActivateFormatsScores(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	_, store := newMuninnTestStore(t)
 
 	activated, err := store.Activate(context.Background(), "t1", "u1", "s1", []string{"name"}, 10)
 	if err != nil {
@@ -473,8 +471,7 @@ func TestMuninnStore_ActivateFormatsScores(t *testing.T) {
 }
 
 func TestMuninnStore_Health(t *testing.T) {
-	fixture := newMuninnFixture(t)
-	store := NewMuninnStore(fixture.server.URL, "")
+	fixture, store := newMuninnTestStore(t)
 
 	if !store.Health(context.Background()) {
 		t.Fatal("expected healthy store")
