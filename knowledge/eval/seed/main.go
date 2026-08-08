@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	tenantID = "00000000-0000-0000-0000-000000000001"
-	userID   = "00000000-0000-0000-0000-000000000099"
-	numFiles = 20
+	tenantID      = "00000000-0000-0000-0000-000000000001"
+	userID        = "00000000-0000-0000-0000-000000000099"
+	numFiles      = 20
 	chunksPerFile = 5
-	dim = 1024
+	dim           = 1024
 )
 
 var chunkTexts = [chunksPerFile]string{
@@ -84,24 +84,38 @@ func main() {
 	}
 	defer pool.Close()
 
-	tx, err := pool.Begin(ctx)
+	// Idempotent: delete previous eval data.
+	_, _ = pool.Exec(ctx, `DELETE FROM public.embeddings WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM public.file_chunks WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM public.chunks WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM public.files WHERE user_id = $1 AND tenant_id = $2`, userID, tenantID)
+	_, _ = pool.Exec(ctx, `DELETE FROM public.tenant_members WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM public.tenants WHERE id = $1`, tenantID)
+
+	// Insert tenant + member.
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.tenants (id,name,slug,created_by,created_at,updated_at)
+		 VALUES ($1,'eval-tenant','eval',$1,now(),now())`, tenantID)
 	if err != nil {
-		log.Fatalf("begin: %v", err)
+		log.Fatalf("insert tenant: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.tenant_members (tenant_id,user_id,email,role,created_at)
+		 VALUES ($1,$2,'eval@kawai.test','owner',now())`, tenantID, userID)
+	if err != nil {
+		log.Fatalf("insert tenant_member: %v", err)
+	}
 
-	// Ensure tenant + user exist (idempotent).
-	_, _ = tx.Exec(ctx, `INSERT INTO public.tenants (id,name,slug,created_at,updated_at) VALUES ($1,'eval-tenant','eval',now(),now()) ON CONFLICT (id) DO NOTHING`, tenantID)
-	_, _ = tx.Exec(ctx, `INSERT INTO public.tenant_members (tenant_id,user_id,role,created_at) VALUES ($1,$2,'OWNER',now()) ON CONFLICT (tenant_id,user_id) DO NOTHING`, tenantID, userID)
-
-	// Insert files.
+	// Insert files (real schema: file_type, size, url are NOT NULL).
 	fileIDs := make([]string, numFiles)
 	for i := range fileIDs {
 		var id string
-		err := tx.QueryRow(ctx,
-			`INSERT INTO public.files (id,user_id,tenant_id,name,status,created_at,updated_at)
-			 VALUES (gen_random_uuid(),$1,$2,$3,'DONE',now(),now()) RETURNING id`,
-			userID, tenantID, fmt.Sprintf("eval-doc-%02d.txt", i+1),
+		err := pool.QueryRow(ctx,
+			`INSERT INTO public.files (id,user_id,tenant_id,name,file_type,size,url,created_at,updated_at)
+			 VALUES (gen_random_uuid(),$1,$2,$3,'text/plain',1024,$4,now(),now()) RETURNING id`,
+			userID, tenantID,
+			fmt.Sprintf("eval-doc-%02d.txt", i+1),
+			fmt.Sprintf("file:///eval-doc-%02d.txt", i+1),
 		).Scan(&id)
 		if err != nil {
 			log.Fatalf("insert file %d: %v", i+1, err)
@@ -110,8 +124,7 @@ func main() {
 	}
 
 	// Insert chunks + file_chunks + random embeddings.
-	// Track chunk IDs per file for the eval dataset.
-	fileChunks := make([][]string, numFiles) // fileChunks[i] = chunk IDs for file i
+	fileChunks := make([][]string, numFiles)
 	for i := range fileChunks {
 		fileChunks[i] = make([]string, chunksPerFile)
 	}
@@ -119,29 +132,32 @@ func main() {
 	for fi, fid := range fileIDs {
 		for ci := 0; ci < chunksPerFile; ci++ {
 			var chunkID string
-			err := tx.QueryRow(ctx,
-				`INSERT INTO public.chunks (id,document_id,"text","index","type",created_at,updated_at,metadata)
-				 VALUES (gen_random_uuid(),$1,$2,$3,'text',now(),now(),'{}') RETURNING id`,
-				fid, chunkTexts[ci], ci,
+			// chunks has user_id, tenant_id; no document_id column.
+			err := pool.QueryRow(ctx,
+				`INSERT INTO public.chunks (id,"text","index","type",user_id,tenant_id,created_at,updated_at,metadata)
+				 VALUES (gen_random_uuid(),$1,$2,'text',$3,$4,now(),now(),'{}') RETURNING id`,
+				chunkTexts[ci], ci, userID, tenantID,
 			).Scan(&chunkID)
 			if err != nil {
 				log.Fatalf("insert chunk: %v", err)
 			}
 			fileChunks[fi][ci] = chunkID
 
-			_, err = tx.Exec(ctx,
-				`INSERT INTO public.file_chunks (chunk_id,file_id) VALUES ($1,$2)`,
-				chunkID, fid,
+			// file_chunks has user_id, tenant_id.
+			_, err = pool.Exec(ctx,
+				`INSERT INTO public.file_chunks (file_id,chunk_id,user_id,tenant_id) VALUES ($1,$2,$3,$4)`,
+				fid, chunkID, userID, tenantID,
 			)
 			if err != nil {
 				log.Fatalf("insert file_chunk: %v", err)
 			}
 
+			// embeddings has user_id, tenant_id.
 			vec := randVec()
-			_, err = tx.Exec(ctx,
-				`INSERT INTO public.embeddings (chunk_id,embeddings,model,created_at)
-				 VALUES ($1,$2::vector(1024),'fileprocessor',now())`,
-				chunkID, vecLiteral(vec),
+			_, err = pool.Exec(ctx,
+				`INSERT INTO public.embeddings (chunk_id,embeddings,model,user_id,tenant_id,created_at)
+				 VALUES ($1,$2::vector(1024),'fileprocessor',$3,$4,now())`,
+				chunkID, vecLiteral(vec), userID, tenantID,
 			)
 			if err != nil {
 				log.Fatalf("insert embedding: %v", err)
@@ -149,26 +165,12 @@ func main() {
 		}
 	}
 
-	// Update file stats.
-	_, err = tx.Exec(ctx, `
-		UPDATE public.files SET
-			chunk_count = (SELECT COUNT(*) FROM public.file_chunks WHERE file_id = public.files.id),
-			chunking_status = 'DONE', embedding_status = 'DONE', updated_at = now()
-		WHERE user_id = $1 AND tenant_id = $2`, userID, tenantID)
-	if err != nil {
-		log.Fatalf("update stats: %v", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		log.Fatalf("commit: %v", err)
-	}
-
-	// Build eval dataset: each query targets chunk index 0 of file i (deterministic).
+	// Build eval dataset: each query targets chunk index 0 of file i.
 	queries := make([]evalQuery, numFiles)
 	for i := range queries {
 		queries[i] = evalQuery{
 			Query:    fmt.Sprintf("topic %d deployment or configuration", i+1),
-			Relevant: []string{fileChunks[i][0]}, // first chunk of each file
+			Relevant: []string{fileChunks[i][0]},
 		}
 	}
 
