@@ -41,8 +41,9 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 ### Eval harness (`egent-tools/knowledge/eval/`)
 | File | Purpose |
 |---|---|
-| `benchmark_test.go` | `TestBenchmark_R6Recall` — gated benchmark comparing single-query vs multi-query (R6) recall@K + MRR over a labeled dataset. Skips without `KAWAI_PG_DSN` + `EVAL_DATASET`. |
+| `benchmark_test.go` | `TestBenchmark_R6Recall` — gated benchmark comparing single-query vs multi-query (R6) recall@K + MRR over a labeled dataset. Auto-detects NVIDIA or OpenAI-compatible endpoint. |
 | `dataset.example.json` | Starter eval set format (~12 queries; extend to ~30 with real chunk IDs). |
+| `nvidia_embedder.go` | Lightweight NVIDIA NIM embedder (`nvidia/nv-embedqa-e5-v5`). Handles `input_type` param and omits unsupported `dimensions` param. |
 | `seed/main.go` | Seeding tool: generates 20 files × 5 chunks with random embeddings + writes `dataset.json` with deterministic relevant-chunk IDs. `go run ./knowledge/eval/seed -dsn $KAWAI_PG_DSN -out dataset.json` |
 
 ### Sibling: `egent-tools/rerank/`
