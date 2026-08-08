@@ -185,6 +185,7 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		docs, derr := t.svc.Retriever().Retrieve(ctx, q,
 			retriever.WithTopK(args.Limit),
 			fp.WithFileIDs(fileIDs...),
+			fp.WithTenantID(tenantID),
 		)
 		if derr != nil {
 			if i == 0 {
