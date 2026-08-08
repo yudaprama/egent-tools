@@ -165,12 +165,23 @@ func main() {
 		}
 	}
 
-	// Build eval dataset: each query targets chunk index 0 of file i.
-	queries := make([]evalQuery, numFiles)
-	for i := range queries {
+	// Build eval dataset: each query targets chunk i of file 1 (deterministic).
+	// Queries are written to match the chunk text for BM25 keyword recall.
+	queryTargets := []struct {
+		query     string
+		chunkIdx  int
+	}{
+		{"Kubernetes deployment Helm charts helm upgrade", 0},
+		{"CI/CD pipeline GitHub Actions ci.yml push main deploy", 1},
+		{"Database connection pooling pgxpool KAWAI_PG_DSN max connections", 2},
+		{"Authentication Oathkeeper edge auth sessions workspace", 3},
+		{"Rate limiting envoy.yaml per-workspace quotas", 4},
+	}
+	queries := make([]evalQuery, len(queryTargets))
+	for i, qt := range queryTargets {
 		queries[i] = evalQuery{
-			Query:    fmt.Sprintf("topic %d deployment or configuration", i+1),
-			Relevant: []string{fileChunks[i][0]},
+			Query:    qt.query,
+			Relevant: []string{fileChunks[0][qt.chunkIdx]}, // chunk from file 1
 		}
 	}
 

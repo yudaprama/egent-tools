@@ -44,6 +44,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kawai-network/x v1.0.47 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/lib/pq v1.12.3 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/meguminnnnnnnnn/go-openai v0.1.2 // indirect
