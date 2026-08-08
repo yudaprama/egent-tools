@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,8 +60,14 @@ func buildService(ctx context.Context, t *testing.T, ds *dataset) (*knowledge.Se
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
+	embedderURL := envOr("OPENAI_EMBEDDINGS_URL", "")
+	if embedderURL == "" {
+		if base := os.Getenv("MODEL_BASE_URL"); base != "" {
+			embedderURL = strings.TrimRight(base, "/") + "/embeddings"
+		}
+	}
 	embedder := fp.NewOpenAIEmbedder(
-		envOr("OPENAI_EMBEDDINGS_URL", ""),
+		embedderURL,
 		envOr("OPENAI_API_KEY", os.Getenv("MODEL_API_KEY")),
 		envOr("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small"),
 		fp.DefaultEmbeddingDim,

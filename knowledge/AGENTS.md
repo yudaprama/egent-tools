@@ -150,7 +150,7 @@ type ChunkStore interface { GetDocument, CreateChunk, GetChunksByIDs, GetFile, U
 | Var | Default | Effect |
 |---|---|---|
 | `KAWAI_PG_DSN` | — | kawai DB pool. Unset → no knowledge tools. (fallback: `KNOWLEDGE_PG_DSN`) |
-| `OPENAI_EMBEDDINGS_URL` | `MODEL_BASE_URL`+`/embeddings` | Embeddings endpoint. Unset → search skipped. |
+| `OPENAI_EMBEDDINGS_URL` | `MODEL_BASE_URL`+`/embeddings` | Embeddings endpoint. Unset → search skipped. Provider-agnostic: any OpenAI-compatible `/v1/embeddings` endpoint works. |
 | `OPENAI_EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embedding model. |
 | `OPENAI_API_KEY` / `MODEL_API_KEY` | — | Embeddings auth. |
 | `NVIDIA_API_KEYS` | — | Comma-separated rerank keys. Unset → no rerank (silent). |
