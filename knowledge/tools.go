@@ -36,6 +36,9 @@ type KnowledgeBackend interface {
 	UserFileIDs(ctx context.Context, userID, tenantID, projectID string) ([]string, error)
 	Retriever() retriever.Retriever
 	Rerank(ctx context.Context, query string, documents []*schema.Document) ([]*schema.Document, error)
+	// ExpandParent prepends parent-chunk context. Called AFTER per-file
+	// deduplication so siblings sharing a parent survive (architecture review B1).
+	ExpandParent(ctx context.Context, docs []*schema.Document) []*schema.Document
 }
 
 // KnowledgeSearchTool performs semantic search over the current user's
@@ -50,7 +53,14 @@ type KnowledgeBackend interface {
 type KnowledgeSearchTool struct {
 	svc         KnowledgeBackend
 	rerankModel rerank.Reranker
+	rewriter    QueryRewriter
 }
+
+// SetQueryRewriter enables multi-query retrieval (architecture review R6).
+// When set, the tool rewrites the query, retrieves per variant in parallel with
+// the original, and fuses the ranked lists with RRF. Leave nil (default) for the
+// single-query path. Should be measured against recall@K before enabling.
+func (t *KnowledgeSearchTool) SetQueryRewriter(r QueryRewriter) { t.rewriter = r }
 
 // NewKnowledgeSearchTool wraps a Service (or any KnowledgeBackend) as an
 // Eino tool. Pass nil to create a tool that always returns a "not
@@ -154,27 +164,75 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		return "No documents found for this user. Upload files via the AList integration to populate the knowledge base.", nil
 	}
 
-	results, err := t.svc.Retriever().Retrieve(ctx, args.Query,
-		retriever.WithTopK(args.Limit),
-		fp.WithFileIDs(fileIDs...),
-		fp.WithExpandParent(true),
-	)
+	// Build the query set: the original plus any rewrites (R6). Query
+	// rewriting is opt-in; when no rewriter is wired this is just [args.Query].
+	queries := []string{args.Query}
+	if t.rewriter != nil {
+		if rewrites, rerr := t.rewriter.Rewrite(ctx, args.Query); rerr != nil {
+			slog.Warn("knowledge_search: query rewrite failed, using original query only", "error", rerr)
+		} else if len(rewrites) > 0 {
+			queries = append(queries, rewrites...)
+			span.SetAttributes(attribute.Int("query.rewrite_count", len(rewrites)))
+		}
+	}
+
+	// Retrieve per query and fuse ranked lists with RRF. Equal weight is given
+	// to the original and each rewrite. When there is only one query, the
+	// fusion function returns that list unchanged.
+	grouped := make(map[string][]*schema.Document, len(queries))
+	weights := make(map[string]float64, len(queries))
+	for i, q := range queries {
+		docs, derr := t.svc.Retriever().Retrieve(ctx, q,
+			retriever.WithTopK(args.Limit),
+			fp.WithFileIDs(fileIDs...),
+		)
+		if derr != nil {
+			if i == 0 {
+				span.SetStatus(codes.Error, "semantic search")
+				span.RecordError(derr)
+				slog.Warn("knowledge_search: semantic search failed", "error", derr, "user_id", userID)
+				return "", fmt.Errorf("knowledge_search: search: %w", derr)
+			}
+			slog.Warn("knowledge_search: rewrite sub-query retrieve failed", "query_index", i, "error", derr)
+			continue
+		}
+		key := fmt.Sprintf("q%d", i)
+		grouped[key] = docs
+		weights[key] = 1.0
+	}
+	if len(grouped) == 0 {
+		return "", fmt.Errorf("knowledge_search: all retrieve attempts failed")
+	}
+	fusion := fp.WeightedRRFFusion(weights, 60)
+	results, err := fusion(ctx, grouped)
 	if err != nil {
-		span.SetStatus(codes.Error, "semantic search")
+		span.SetStatus(codes.Error, "rrf fusion")
 		span.RecordError(err)
-		slog.Warn("knowledge_search: semantic search failed", "error", err, "user_id", userID)
-		return "", fmt.Errorf("knowledge_search: search: %w", err)
+		return "", fmt.Errorf("knowledge_search: fuse: %w", err)
 	}
 	span.SetAttributes(attribute.Int("results.count", len(results)))
 
+	// Rerank is optional and degrades silently by design (architecture review
+	// M1/R7). Track the outcome so it is observable on the span and surfaced to
+	// the agent when it was expected but did not apply.
+	rerankApplied := false
+	rerankFailed := false
 	if t.rerankModel != nil && len(results) > 0 {
 		reranked, err := t.rerankResults(ctx, args.Query, results)
-		if err != nil {
-			slog.Warn("knowledge_search: rerank failed, using original results", "error", err)
-		} else if len(reranked) > 0 {
+		switch {
+		case err != nil:
+			rerankFailed = true
+			slog.Warn("knowledge_search: rerank failed, using unranked results", "error", err)
+		case len(reranked) > 0:
 			results = reranked
+			rerankApplied = true
 		}
 	}
+	span.SetAttributes(
+		attribute.Bool("rerank.configured", t.rerankModel != nil),
+		attribute.Bool("rerank.applied", rerankApplied),
+		attribute.Bool("rerank.failed", rerankFailed),
+	)
 
 	minScore := args.MinScore
 	if minScore <= 0 {
@@ -182,6 +240,9 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 	}
 	results = filterByMinScore(results, minScore)
 	results = deduplicateByFile(results)
+	// Parent-context expansion runs LAST, after per-file dedupe, so distinct
+	// sibling chunks sharing a parent are not collapsed (architecture review B1).
+	results = t.svc.ExpandParent(ctx, results)
 
 	span.SetAttributes(
 		attribute.Float64("min_score", minScore),
@@ -193,7 +254,13 @@ func (t *KnowledgeSearchTool) InvokableRun(ctx context.Context, argsJSON string,
 		return fmt.Sprintf("No relevant documents found for query: %q", args.Query), nil
 	}
 
-	return FormatResults(results, args.Query), nil
+	out := FormatResults(results, args.Query)
+	if rerankFailed {
+		// Surface the silent degradation so the agent can decide whether to
+		// widen the query — rerank was configured but did not run.
+		out = "(note: reranking was unavailable, so results are in retrieval order; consider a more specific query.)\n\n" + out
+	}
+	return out, nil
 }
 
 // rerankResults applies the rerank model and then positions the scored

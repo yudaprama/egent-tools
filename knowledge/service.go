@@ -4,11 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
@@ -23,14 +18,17 @@ import (
 // per user by looking up the user's file IDs and passing them as a filter to
 // the eino Retriever.
 //
+// Keyword (BM25) search runs against Postgres full-text search
+// (public.chunks.fts_vector) via PublicEmbeddingsStore.KeywordSearch — the
+// authoritative, always-in-sync index. There is no separate local keyword
+// projection. See the knowledge-base architecture review, recommendation R2.
+//
 // Service is long-lived; create once at process startup and Close on shutdown.
 type Service struct {
-	pool         *pgxpool.Pool
-	retriever    retriever.Retriever
-	rerankModel  rerank.Reranker
-	keywordIndex *fp.SQLiteKeywordIndex
-	keywordStop  chan struct{}
-	keywordWG    sync.WaitGroup
+	pool        *pgxpool.Pool
+	retriever   retriever.Retriever
+	rerankModel rerank.Reranker
+	chunks      fp.ChunkStore
 }
 
 // NewService creates a knowledge service using the given shared Postgres pool.
@@ -48,8 +46,8 @@ func NewService(ctx context.Context, pool *pgxpool.Pool, embedder fp.Embedder) (
 	if embedder == nil {
 		return nil, errors.New("knowledge: embedder is required")
 	}
-	if embedder.Dimension() != 0 && embedder.Dimension() != 1024 {
-		return nil, fmt.Errorf("knowledge: embedder dimension must be 1024 to match public.embeddings, got %d", embedder.Dimension())
+	if embedder.Dimension() != 0 && embedder.Dimension() != fp.DefaultEmbeddingDim {
+		return nil, fmt.Errorf("knowledge: embedder dimension must be %d to match public.embeddings, got %d", fp.DefaultEmbeddingDim, embedder.Dimension())
 	}
 
 	vecStore, err := fp.NewPublicEmbeddingsStoreWithPool(ctx, pool, nil)
@@ -60,58 +58,32 @@ func NewService(ctx context.Context, pool *pgxpool.Pool, embedder fp.Embedder) (
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: create file store: %w", err)
 	}
-	keywordIndexPath := os.Getenv("KAWAI_KNOWLEDGE_FTS_PATH")
-	if keywordIndexPath == "" {
-		keywordIndexPath = filepath.Join(".plano", "run", "knowledge-fts.db")
-	}
-	keywordIndex, err := fp.NewSQLiteKeywordIndex(keywordIndexPath)
-	if err != nil {
-		return nil, fmt.Errorf("knowledge: create SQLite keyword index: %w", err)
-	}
-	if err := keywordIndex.RefreshFromPostgres(ctx, pool); err != nil {
-		_ = keywordIndex.Close()
-		return nil, fmt.Errorf("knowledge: initial SQLite keyword index refresh: %w", err)
-	}
+	chunks := fileStore.ChunkStore()
 
+	// Keyword (BM25) search is NOT passed explicitly: NewRetriever auto-detects
+	// that PublicEmbeddingsStore implements KeywordSearcher (PG FTS over
+	// chunks.fts_vector) and wires it. The fts_vector column is a STORED
+	// generated column (migration 20260802000001), so it is always in sync
+	// with chunk text — no rebuild goroutine needed. See architecture review R2.
+	//
+	// ExpandParent is false here: parent-context expansion runs as a
+	// post-retrieval step in the tool (after per-file dedupe) so sibling
+	// chunks sharing a parent are not collapsed. See architecture review B1.
 	ret, err := fp.NewRetriever(ctx, &fp.RetrieverConfig{
 		Store:        vecStore,
-		Chunks:       fileStore.ChunkStore(),
+		Chunks:       chunks,
 		Embedder:     embedder,
-		Keyword:      keywordIndex,
-		ExpandParent: true,
+		ExpandParent: false,
 	})
 	if err != nil {
-		_ = keywordIndex.Close()
 		return nil, fmt.Errorf("knowledge: create retriever: %w", err)
 	}
 
-	svc := &Service{
-		pool:         pool,
-		retriever:    ret,
-		keywordIndex: keywordIndex,
-		keywordStop:  make(chan struct{}),
-	}
-	svc.keywordWG.Add(1)
-	go svc.refreshKeywordIndex()
-	return svc, nil
-}
-
-func (s *Service) refreshKeywordIndex() {
-	defer s.keywordWG.Done()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-			if err := s.keywordIndex.RefreshFromPostgres(ctx, s.pool); err != nil {
-				slog.Warn("knowledge: refresh SQLite keyword index failed", "error", err)
-			}
-			cancel()
-		case <-s.keywordStop:
-			return
-		}
-	}
+	return &Service{
+		pool:      pool,
+		retriever: ret,
+		chunks:    chunks,
+	}, nil
 }
 
 // NewServiceWithRetriever is a test hook that bypasses DB setup and injects a
@@ -146,19 +118,20 @@ func (s *Service) Rerank(ctx context.Context, query string, documents []*schema.
 	return s.rerankModel.Rerank(ctx, query, documents)
 }
 
-// Close stops the keyword-index refresher and closes its local SQLite file.
-// The shared Postgres pool lifecycle is managed by the caller.
+// ExpandParent prepends parent-chunk context to each result. The tool calls
+// this AFTER per-file deduplication (not inside Retrieve) so distinct sibling
+// chunks that share a parent are not collapsed by the dedupe step. See the
+// knowledge-base architecture review, finding B1.
+func (s *Service) ExpandParent(ctx context.Context, docs []*schema.Document) []*schema.Document {
+	if s == nil || s.chunks == nil {
+		return docs
+	}
+	return fp.ExpandParentContext(ctx, s.chunks, docs)
+}
+
+// Close releases Service resources. The shared Postgres pool lifecycle is
+// managed by the caller (it is not closed here).
 func (s *Service) Close() error {
-	if s == nil {
-		return nil
-	}
-	if s.keywordStop != nil {
-		close(s.keywordStop)
-		s.keywordWG.Wait()
-	}
-	if s.keywordIndex != nil {
-		return s.keywordIndex.Close()
-	}
 	return nil
 }
 

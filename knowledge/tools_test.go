@@ -58,6 +58,7 @@ type fakeService struct {
 	projectFileIDs map[string][]string
 	fileErr        error
 	rerankResults  []*schema.Document
+	parentText     string
 }
 
 func (f *fakeService) UserFileIDs(_ context.Context, _, _, projectID string) ([]string, error) {
@@ -74,6 +75,20 @@ func (f *fakeService) Retriever() retriever.Retriever { return f.ret }
 
 func (f *fakeService) Rerank(_ context.Context, _ string, _ []*schema.Document) ([]*schema.Document, error) {
 	return f.rerankResults, nil
+}
+
+// ExpandParent mimics fp.ExpandParentContext: when parentText is set, it
+// prepends the shared parent context to any doc carrying a DocumentMetaParentID.
+func (f *fakeService) ExpandParent(_ context.Context, docs []*schema.Document) []*schema.Document {
+	if f.parentText == "" {
+		return docs
+	}
+	for _, doc := range docs {
+		if fp.DocumentStringMetadata(doc, fp.DocumentMetaParentID) != "" {
+			doc.Content = "[Context from section]\n" + f.parentText + "\n\n[Excerpt]\n" + doc.Content
+		}
+	}
+	return docs
 }
 
 func TestKnowledgeSearchTool_RerankPlacesHighScoresAtContextEdges(t *testing.T) {
@@ -370,5 +385,59 @@ func TestJaccard_Empty(t *testing.T) {
 	}
 	if jaccard(map[string]struct{}{"a": {}}, nil) != 0.0 {
 		t.Fatal("expected 0.0 for non-empty vs empty")
+	}
+}
+
+// TestKnowledgeSearch_DoesNotCollapseSiblingSections is the regression test for
+// architecture-review B1: parent-context expansion must run AFTER per-file
+// deduplication. The three chunks below are distinct siblings (child-only
+// Jaccard ≈ 0) sharing one parent. Once the long parent text is prepended they
+// become >0.8 similar, so if dedupe ran on the expanded content two siblings
+// would be dropped. The fix expands after dedupe, so all three survive.
+func TestKnowledgeSearch_DoesNotCollapseSiblingSections(t *testing.T) {
+	// Long shared parent section (30 distinct words). Short, distinct child
+	// excerpts whose only overlap with each other is via the parent.
+	parentText := "quarterly financial report revenue expenses projections " +
+		"departments marketing operations engineering sales growth decline " +
+		"margin volume capacity utilization forecast budget allocation " +
+		"resources staffing hiring compliance audit treasury payroll " +
+		"logistics procurement facilities"
+
+	mk := func(id, content string, score float64) *schema.Document {
+		return (&schema.Document{
+			ID:      id,
+			Content: content,
+			MetaData: map[string]any{
+				fp.DocumentMetaFileID:   "file-1",
+				fp.DocumentMetaFileName: "report.md",
+				fp.DocumentMetaParentID: "parent-1",
+			},
+		}).WithScore(score)
+	}
+
+	ret := &fakeRetriever{results: []*schema.Document{
+		mk("c1", "revenue increased significantly", 0.9),
+		mk("c2", "expenses decreased notably", 0.8),
+		mk("c3", "projections improved markedly", 0.7),
+	}}
+	svc := &fakeService{
+		ret:        ret,
+		fileIDs:    []string{"file-1"},
+		parentText: parentText,
+	}
+	ctx := memory.WithTenantID(memory.WithUserID(context.Background(), "u-1"), "t-1")
+	tl := NewKnowledgeSearchTool(svc, nil)
+
+	out, err := tl.InvokableRun(ctx, `{"query":"financial","limit":10}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Each child has a unique word absent from the parent; all three must
+	// survive. If expansion ran before dedupe, only one sibling would remain.
+	for _, want := range []string{"increased", "decreased", "improved"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("B1 regression: %q missing — sibling section was collapsed by dedupe-after-expand.\noutput:\n%s", want, out)
+		}
 	}
 }
