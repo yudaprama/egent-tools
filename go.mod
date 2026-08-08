@@ -1,6 +1,6 @@
 module github.com/yudaprama/egent-tools
 
-go 1.26.0
+go 1.26.4
 
 require (
 	github.com/cloudwego/eino v0.9.12
@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/kawai-network/fileprocessor v0.5.2
 	github.com/scrypster/muninndb/sdk/go/muninn v0.0.0-20260612122835-b9c61193ca19
+	github.com/yudaprama/egent-common v0.0.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
 )
@@ -16,6 +17,8 @@ require (
 replace github.com/kawai-network/fileprocessor => ../fileprocessor
 
 replace github.com/scrypster/muninndb/sdk/go/muninn => ../muninndb/sdk/go/muninn
+
+replace github.com/yudaprama/egent-common => ../egent-common
 
 replace github.com/yudaprama/tools => ../tools
 

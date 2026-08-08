@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
-	"os"
-	"strings"
 	"time"
+
+	"github.com/yudaprama/egent-common/envutil"
 
 	"github.com/cloudwego/eino/schema"
 )
@@ -144,16 +143,5 @@ func (r *NvidiaReranker) GetModelID() string {
 }
 
 func resolveNvidiaAPIKey() string {
-	v := os.Getenv("NVIDIA_API_KEYS")
-	if v == "" {
-		return ""
-	}
-	keys := strings.Split(v, ",")
-	for i, k := range keys {
-		keys[i] = strings.TrimSpace(k)
-	}
-	if len(keys) == 1 {
-		return keys[0]
-	}
-	return keys[rand.Intn(len(keys))]
+	return envutil.PickRandomKey("NVIDIA_API_KEYS")
 }
