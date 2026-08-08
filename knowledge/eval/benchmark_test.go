@@ -61,19 +61,19 @@ func buildService(ctx context.Context, t *testing.T, ds *dataset) (*knowledge.Se
 		t.Fatalf("pgxpool: %v", err)
 	}
 	var embedder fp.Embedder
-	// Priority: OPENAI_EMBEDDINGS_URL / MODEL_BASE_URL → NVIDIA_API_KEYS → skip
+	// Priority: EMBEDDINGS_URL → NVIDIA_API_KEYS → skip
 	if url := embedderURL(); url != "" {
 		embedder = fp.NewOpenAIEmbedder(
 			url,
-			envOr("OPENAI_API_KEY", os.Getenv("MODEL_API_KEY")),
-			envOr("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-small"),
+			firstKey(os.Getenv("NVIDIA_API_KEYS")),
+			envOr("EMBEDDINGS_MODEL", "text-embedding-3-small"),
 			fp.DefaultEmbeddingDim,
 		)
 	} else if nvidiaKey := firstKey(os.Getenv("NVIDIA_API_KEYS")); nvidiaKey != "" {
 		embedder = newNVIDIAEmbedder(nvidiaKey, "nvidia/nv-embedqa-e5-v5", "passage")
 		t.Log("using NVIDIA embeddings (nvidia/nv-embedqa-e5-v5)")
 	} else {
-		t.Fatal("no embedding endpoint: set OPENAI_EMBEDDINGS_URL, MODEL_BASE_URL, or NVIDIA_API_KEYS")
+		t.Fatal("no embedding endpoint: set EMBEDDINGS_URL or NVIDIA_API_KEYS")
 	}
 	svc, err := knowledge.NewService(ctx, pool, embedder)
 	if err != nil {
@@ -92,11 +92,8 @@ func buildService(ctx context.Context, t *testing.T, ds *dataset) (*knowledge.Se
 }
 
 func embedderURL() string {
-	if v := os.Getenv("OPENAI_EMBEDDINGS_URL"); v != "" {
+	if v := os.Getenv("EMBEDDINGS_URL"); v != "" {
 		return v
-	}
-	if base := os.Getenv("MODEL_BASE_URL"); base != "" {
-		return strings.TrimRight(base, "/") + "/embeddings"
 	}
 	return ""
 }
