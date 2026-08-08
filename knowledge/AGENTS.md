@@ -26,6 +26,7 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 | `docs/knowledge-base-architecture-review.md` | The authoritative architecture + a live correctness bug (B1), design risks, prioritized recommendations. **Read before changing retrieval.** |
 | `fileprocessor/AGENTS.md` | The `fileprocessor` library internals (stores, chunker, loader, pgvector, hybrid retriever). |
 | `docs/knowledge-base-comparison-weknora-vs-kawai.md` | Schema + pipeline comparison vs WeKnora (analytical, not how-to). |
+| `docs/knowledge-r6-measurement.md` | R6 recall@K measurement procedure — how to build the eval set, run the benchmark, and the decision rule. |
 | `API_MAP.md` | The ingest→embed→retrieve data flow across services. |
 
 ## File map
@@ -36,6 +37,12 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 | `tools.go` | `KnowledgeSearchTool` (Eino tool) — parses args, scopes per-user, calls retriever, reranks, dedupes, formats. **The entrypoint: `InvokableRun` (`tools.go:88`).** Also holds `FormatResults`, `deduplicateByFile`, `filterByMinScore`. |
 | `service.go` | `Service` — wires pgvector store + chunk store + keyword index + hybrid retriever; long-lived. Created at egent startup. |
 | `service_test.go`, `tools_test.go` | Tool/service tests with `fakeService`/`fakeRetriever` (no DB). |
+
+### Eval harness (`egent-tools/knowledge/eval/`)
+| File | Purpose |
+|---|---|
+| `benchmark_test.go` | `TestBenchmark_R6Recall` — gated benchmark comparing single-query vs multi-query (R6) recall@K + MRR over a labeled dataset. Skips without `KAWAI_PG_DSN` + `EVAL_DATASET`. |
+| `dataset.example.json` | Starter eval set (~12 queries; extend to ~30 with real chunk IDs). |
 
 ### Sibling: `egent-tools/rerank/`
 | File | Purpose |
@@ -83,14 +90,22 @@ Status ledger: `async_tasks` (read by the BFF via pREST). River rows live in `ri
 1. userID / tenantID / projectID  ← context (memory.UserIDFromContext …)
 2. UserFileIDs                     ← SELECT id FROM public.files WHERE user_id AND tenant_id [AND project_id]
                                      (service.go:170 — the ONLY ACL; loads IDs into memory)
-3. fp.Retriever.Retrieve(query, WithTopK, WithFileIDs)
-   ├── vectorRetriever   → embed query → PublicEmbeddingsStore.Search (HNSW) → threshold(0.15) → hydrate
-   ├── keywordRetriever  → PublicEmbeddingsStore.KeywordSearch (PG FTS BM25) → threshold(0.3)  → hydrate
+3. fp.Retriever.Retrieve(query, WithTopK, WithFileIDs, WithTenantID)
+   ├── vectorRetriever   → embed query → PublicEmbeddingsStore.Search (HNSW, SET LOCAL app.tenant_id) → threshold(0.15) → hydrate
+   ├── keywordRetriever  → PublicEmbeddingsStore.KeywordSearch (PG FTS BM25, SET LOCAL app.tenant_id)  → threshold(0.3)  → hydrate
    └── WeightedRRFFusion (vector 0.7, keyword 0.3, K=60)
 4. (optional) rerankResults   → NVIDIA rerank → Eino score transformer
 5. filterByMinScore (default 0.3) → deduplicateByFile (word-Jaccard > 0.8) → ExpandParent → FormatResults
    (parent expansion runs LAST, after dedupe — fixes architecture-review B1)
 ```
+
+**R3 enforcement:** `SearchParams.TenantID` is set by `withTenantGuard`, which wraps
+each sub-retriever's call in a PG transaction with `SET LOCAL app.tenant_id = $1`.
+If the env var is empty, the guard is a no-op (safe for dev/CI without RLS). When
+the egent runs as `kawai_kb_reader` (NOBYPASSSRLS), RLS policies on
+`public.embeddings` and `public.chunks` enforce tenant isolation at the DB level.
+The in-memory ACL (`UserFileIDs` → `file_id = ANY(...)`) remains as a secondary
+guard.
 
 ## The keyword index — Postgres FTS (was: dual SQLite + PG)
 
@@ -139,17 +154,19 @@ type ChunkStore interface { GetDocument, CreateChunk, GetChunksByIDs, GetFile, U
 | `OPENAI_API_KEY` / `MODEL_API_KEY` | — | Embeddings auth. |
 | `NVIDIA_API_KEYS` | — | Comma-separated rerank keys. Unset → no rerank (silent). |
 | `KAWAI_KNOWLEDGE_QUERY_REWRITE` | unset | `1`/`true`/`on` enables LLM query rewriting + multi-query RRF (R6). Also needs `MODEL_BASE_URL` + `MODEL_NAME`. **Default off** — measure recall@K before enabling. |
+| `EVAL_DATASET` | — | Path to the JSON eval dataset for `TestBenchmark_R6Recall`. Unset → benchmark skips. |
 
 ## Gotchas
 
 - **✅ B1 — fixed.** Parent-context expansion now runs *after* per-file dedupe (`tools.go` calls `svc.ExpandParent` last), so sibling chunks sharing a parent are no longer collapsed. Guarded by `TestKnowledgeSearch_DoesNotCollapseSiblingSections`. The expansion logic is exported as `fp.ExpandParentContext` (`fileprocessor/eino_retriever.go`); the in-`Retrieve` path is disabled (`ExpandParent: false` in `RetrieverConfig`).
+- **✅ R3 — active.** `SearchParams.TenantID` is set by `withTenantGuard` on every sub-retriever call; `SET LOCAL app.tenant_id` is applied inside a PG transaction. When the egent connects as `kawai_kb_reader` (NOBYPASSSRLS), RLS policies enforce tenant isolation at the DB level. The in-memory ACL (`UserFileIDs`) is still the primary filter and loads into memory; the RLS guard is the safety net.
 - **Keyword index is PG FTS now** — see above. The SQLite index is unwired (library code only). Editing `SQLiteKeywordIndex` has no production effect.
 - **1024-dim is pinned** in 4 places (`service.go:51`,
   `public_embeddings_store.go:55/174/251`) + the schema `vector(1024)`. Changing
   embedding model/dim = migration + full re-embed, no coexistence.
 - **Rerank degrades observably now** (`tools.go`): span attrs `rerank.configured`/`rerank.applied`/`rerank.failed` are set, and a note is prepended to the tool output when rerank was configured but failed (R7).
 - **Query rewriting is opt-in (R6).** `LLMQueryRewriter` + `SetQueryRewriter`; enabled via `KAWAI_KNOWLEDGE_QUERY_REWRITE`. When on, the tool retrieves per rewrite in parallel with the original and fuses with RRF (1 extra LLM call + N× retrieval latency). Default off — measure recall@K before enabling.
-- **ACL is still an in-memory allowlist (R3 pending).** `UserFileIDs` (`service.go:170`) loads file IDs then passes `file_id = ANY(...)` into HNSW, which **post-filters** (recall starvation on small user scopes). An RLS migration is prepared (`db/migrations/20260808000001`) but NOT applied — needs egent `SET LOCAL app.tenant_id` wiring + live-DB verification.
+- **ACL is two-layer: in-memory allowlist + RLS.** `UserFileIDs` (`service.go:170`) loads file IDs then passes `file_id = ANY(...)` into HNSW (primary filter). `withTenantGuard` sets `app.tenant_id` per transaction so RLS policies also filter (safety net). When egent runs as `kawai_kb_reader` (NOBYPASSSRLS), both layers are live. When running as `postgres`, the RLS layer is bypassed but the in-memory ACL still applies.
 - **`deduplicateByFile` is O(n²) per file** (`tools.go:292`) — fine at limit ≤50.
 - **`embeddings.model` is always `"fileprocessor"`** regardless of real model
   (`public_embeddings_store.go:44` `modelTag`) — blocks future model migration.
@@ -183,6 +200,9 @@ This is a library — build & test in-module (it has its own `go.mod`), then rec
 # from inside egent-tools/ (its own module)
 go test ./knowledge/... ./rerank/...
 go vet   ./knowledge/... ./rerank/...
+
+# run R6 recall@K benchmark (requires KAWAI_PG_DSN + EVAL_DATASET + embeddings endpoint)
+EVAL_DATASET=knowledge/eval/dataset.example.json go test -v ./knowledge/eval/ -run TestBenchmark_R6Recall
 
 # exercise end-to-end (recompiles egent-public-apis from source)
 ./planoctl down && ./planoctl up
