@@ -42,7 +42,8 @@ reranks with NVIDIA, dedupes per-file, and formats hits as an LLM context block.
 | File | Purpose |
 |---|---|
 | `benchmark_test.go` | `TestBenchmark_R6Recall` — gated benchmark comparing single-query vs multi-query (R6) recall@K + MRR over a labeled dataset. Skips without `KAWAI_PG_DSN` + `EVAL_DATASET`. |
-| `dataset.example.json` | Starter eval set (~12 queries; extend to ~30 with real chunk IDs). |
+| `dataset.example.json` | Starter eval set format (~12 queries; extend to ~30 with real chunk IDs). |
+| `seed/main.go` | Seeding tool: generates 20 files × 5 chunks with random embeddings + writes `dataset.json` with deterministic relevant-chunk IDs. `go run ./knowledge/eval/seed -dsn $KAWAI_PG_DSN -out dataset.json` |
 
 ### Sibling: `egent-tools/rerank/`
 | File | Purpose |
@@ -202,7 +203,9 @@ go test ./knowledge/... ./rerank/...
 go vet   ./knowledge/... ./rerank/...
 
 # run R6 recall@K benchmark (requires KAWAI_PG_DSN + EVAL_DATASET + embeddings endpoint)
-EVAL_DATASET=knowledge/eval/dataset.example.json go test -v ./knowledge/eval/ -run TestBenchmark_R6Recall
+# first, seed synthetic data + generate eval dataset:
+go run ./knowledge/eval/seed -dsn "$KAWAI_PG_DSN" -out knowledge/eval/dataset.json
+EVAL_DATASET=knowledge/eval/dataset.json go test -v ./knowledge/eval/ -run TestBenchmark_R6Recall
 
 # exercise end-to-end (recompiles egent-public-apis from source)
 ./planoctl down && ./planoctl up

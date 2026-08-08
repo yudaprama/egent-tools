@@ -167,7 +167,7 @@ func TestBenchmark_R6Recall(t *testing.T) {
 	dsn := os.Getenv("KAWAI_PG_DSN")
 	dsPath := os.Getenv("EVAL_DATASET")
 	if dsn == "" || dsPath == "" {
-		t.Skip("KAWAI_PG_DSN or EVAL_DATASET unset; skipping R6 recall benchmark")
+		t.Skip("KAWAI_PG_DSN or EVAL_DATASET unset; skipping R6 recall benchmark — seed data with: go run ./knowledge/eval/seed -dsn $KAWAI_PG_DSN -out dataset.json")
 	}
 	ds, err := loadDataset(dsPath)
 	if err != nil {
